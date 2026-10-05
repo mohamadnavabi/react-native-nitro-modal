@@ -1,0 +1,23 @@
+{
+  "cxxNamespace": ["nitromodal"],
+  "ios": {
+    "iosModuleName": "NitroModal"
+  },
+  "android": {
+    "androidNamespace": ["nitromodal"],
+    "androidCxxLibName": "nitromodal"
+  },
+  "autolinking": {
+    "NitroModal": {
+      "ios": {
+        "language": "swift",
+        "implementationClassName": "HybridNitroModal"
+      },
+      "android": {
+        "language": "kotlin",
+        "implementationClassName": "HybridNitroModal"
+      }
+    }
+  },
+  "ignorePaths": ["node_modules"]
+}
