@@ -3,6 +3,7 @@ package com.margelo.nitro.nitromodal
 import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.view.View
+import com.facebook.react.common.annotations.UnstableReactNativeAPI
 import com.facebook.react.config.ReactFeatureFlags
 import com.facebook.react.uimanager.JSPointerDispatcher
 import com.facebook.react.uimanager.JSTouchDispatcher
@@ -89,6 +90,7 @@ internal class ModalContentRoot(private val reactContext: ThemedReactContext) :
     return super.onHoverEvent(event)
   }
 
+  @OptIn(UnstableReactNativeAPI::class)
   override fun onChildStartedNativeGesture(childView: View?, ev: MotionEvent) {
     eventDispatcher?.let {
       touchDispatcher.onChildStartedNativeGesture(ev, it, reactContext)
