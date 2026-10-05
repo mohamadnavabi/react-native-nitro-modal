@@ -6,7 +6,7 @@ import type {
 
 /**
  * How the modal is presented.
- * - `bottomSheet`: native sheet (iOS `UISheetPresentationController`,
+ * - `bottomSheet`: edge-attached native sheet (iOS custom presentation,
  *   Android `BottomSheetBehavior`) with detents and swipe-to-dismiss.
  * - `popup`: centered dialog with a native fade/scale transition.
  */

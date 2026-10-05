@@ -30,8 +30,8 @@ struct ModalConfig: Equatable {
 /// Callbacks from a presented modal controller back to `HybridNitroModal`.
 protocol ModalPresentationDelegate: AnyObject {
   func modalPresentationDidTapBackdrop()
-  /// The user swiped the sheet away (the dismissal already happened).
-  func modalPresentationDidDismissInteractively()
+  /// The user swiped the sheet down far enough to dismiss it.
+  func modalPresentationDidRequestSwipeDismiss()
   func modalPresentationDidChangeDetent(_ index: Int)
   func modalPresentationDidChangeContentArea(_ size: CGSize)
 }

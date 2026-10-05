@@ -5,30 +5,63 @@
 
 import UIKit
 
-/// `bottomSheet` mode: a page sheet driven by `UISheetPresentationController`.
-/// UIKit owns the pan gesture, detent snapping and swipe-to-dismiss, so all
-/// of it runs on the render server with no JS involvement.
-final class SheetViewController: UIViewController, ModalPresenting, UISheetPresentationControllerDelegate {
+/// `bottomSheet` mode: an edge-attached sheet presented `.overFullScreen`.
+///
+/// `UISheetPresentationController` is not used because iOS 26 always floats
+/// sheets inset from the screen edges at partial detents, with no API to opt
+/// out. Detents, dragging, swipe-to-dismiss and the hand-off to scroll views
+/// inside the content are implemented here with a pan gesture instead.
+final class SheetViewController: UIViewController, ModalPresenting, UIViewControllerTransitioningDelegate, UIGestureRecognizerDelegate {
   weak var presentationDelegate: ModalPresentationDelegate?
+
+  /// Gap kept above the sheet at its tallest, like a system page sheet.
+  private static let topGap: CGFloat = 10
+  /// Extra sheet height below the screen so it stays attached to the bottom
+  /// edge while rubber-banding upward.
+  private static let overscroll: CGFloat = 400
+  private static let defaultCornerRadius: CGFloat = 16
+  private static let regularMaxWidth: CGFloat = 704
+  private static let grabberSize = CGSize(width: 36, height: 5)
 
   private let contentView: NitroModalContentView
   private let backdrop = BackdropView()
+  private let sheetView = UIView()
+  private let grabber = UIView()
   private var config: ModalConfig
-  private var detentIdentifiers: [UISheetPresentationController.Detent.Identifier] = []
-  /// The latest `maximumDetentValue` UIKit handed to one of our detent resolvers.
-  private var maximumDetentValue: CGFloat?
+  private var selectedIndex: Int
   private var keyboardHeight: CGFloat = 0
+
+  /// The sheet sits below the screen (before presenting / while dismissing).
+  private var isOffscreen = true
+  /// Top of the sheet while the user drags it; `nil` rests on `selectedIndex`.
+  private var dragTop: CGFloat?
+  private var drag: DragState?
+  /// Vertical velocity of the swipe that requested the dismissal.
+  private var releaseVelocity: CGFloat = 0
+
+  private var lockedScrollView: UIScrollView?
+  private var lockedOffsetY: CGFloat = 0
+  private var scrollLock: NSKeyValueObservation?
+
+  private struct DragState {
+    /// Unconstrained sheet top, before rubber-banding.
+    var rawTop: CGFloat
+    var lastTranslation: CGFloat = 0
+    var scrollView: UIScrollView?
+    /// Whether the last movement moved the sheet rather than the scroll view.
+    var sheetDrove = false
+  }
 
   init(contentView: NitroModalContentView, config: ModalConfig) {
     self.contentView = contentView
     self.config = config
+    selectedIndex = config.clampedInitialDetentIndex
     super.init(nibName: nil, bundle: nil)
-    modalPresentationStyle = .pageSheet
+    modalPresentationStyle = .overFullScreen
+    transitioningDelegate = self
     backdrop.onTap = { [weak self] in
       self?.presentationDelegate?.modalPresentationDidTapBackdrop()
     }
-    backdrop.configure(color: config.backdropColor, opacity: config.backdropOpacity, blurRadius: config.backdropBlurRadius)
-    configureSheet(selectingDetentAt: config.clampedInitialDetentIndex)
 
     let center = NotificationCenter.default
     center.addObserver(self, selector: #selector(keyboardWillChangeFrame(_:)), name: UIResponder.keyboardWillChangeFrameNotification, object: nil)
@@ -42,123 +75,122 @@ final class SheetViewController: UIViewController, ModalPresenting, UISheetPrese
 
   override func loadView() {
     let root = UIView()
-    root.backgroundColor = config.contentBackgroundColor
-    root.accessibilityViewIsModal = true
-    contentView.frame = root.bounds
-    contentView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    root.addSubview(contentView)
+    root.backgroundColor = .clear
+    root.addSubview(backdrop)
+
+    sheetView.clipsToBounds = true
+    sheetView.layer.cornerCurve = .continuous
+    sheetView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+    sheetView.accessibilityViewIsModal = true
+    sheetView.addSubview(contentView)
+
+    grabber.isUserInteractionEnabled = false
+    grabber.backgroundColor = .tertiaryLabel
+    grabber.layer.cornerRadius = Self.grabberSize.height / 2
+    sheetView.addSubview(grabber)
+    root.addSubview(sheetView)
+
+    let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
+    pan.delegate = self
+    sheetView.addGestureRecognizer(pan)
+
     view = root
-  }
-
-  override func viewWillAppear(_ animated: Bool) {
-    super.viewWillAppear(animated)
-    installBackdrop()
-    animateBackdrop(to: 1)
-  }
-
-  override func viewWillDisappear(_ animated: Bool) {
-    super.viewWillDisappear(animated)
-    if isBeingDismissed || presentingViewController?.isBeingDismissed == true {
-      animateBackdrop(to: 0)
-    }
+    applyAppearance()
   }
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
+    layoutSheet()
     reportContentArea()
+  }
+
+  override func viewDidDisappear(_ animated: Bool) {
+    super.viewDidDisappear(animated)
+    unlockScroll()
+  }
+
+  override func accessibilityPerformEscape() -> Bool {
+    guard config.dismissOnSwipe else { return false }
+    presentationDelegate?.modalPresentationDidRequestSwipeDismiss()
+    return true
   }
 
   // MARK: ModalPresenting
 
   func apply(_ newConfig: ModalConfig) {
-    let selectedIndex = sheetPresentationController?.selectedDetentIdentifier
-      .flatMap { detentIdentifiers.firstIndex(of: $0) }
     config = newConfig
-    if isViewLoaded {
-      view.backgroundColor = config.contentBackgroundColor
-    }
-    backdrop.configure(color: config.backdropColor, opacity: config.backdropOpacity, blurRadius: config.backdropBlurRadius)
-    let index = min(selectedIndex ?? config.clampedInitialDetentIndex, max(config.detents.count - 1, 0))
-    guard let sheet = sheetPresentationController else { return }
-    sheet.animateChanges {
-      configureSheet(selectingDetentAt: index)
-    }
-    reportContentArea()
+    selectedIndex = min(selectedIndex, max(detents.count - 1, 0))
+    guard isViewLoaded else { return }
+    applyAppearance()
+    animateToRest()
   }
 
   func contentSizeDidChange() {
-    guard config.detents.contains(.fitcontent), let sheet = sheetPresentationController else { return }
-    if #available(iOS 16.0, *) {
-      sheet.animateChanges {
-        sheet.invalidateDetents()
-      }
-    }
+    guard config.detents.contains(.fitcontent) else { return }
+    animateToRest()
   }
 
   func snapToDetent(at index: Int) {
-    guard detentIdentifiers.indices.contains(index), let sheet = sheetPresentationController else { return }
-    sheet.animateChanges {
-      sheet.selectedDetentIdentifier = detentIdentifiers[index]
-    }
-    // UIKit only notifies the delegate for user-driven changes.
+    guard detents.indices.contains(index) else { return }
+    selectedIndex = index
+    animateToRest()
     presentationDelegate?.modalPresentationDidChangeDetent(index)
   }
 
-  // MARK: UISheetPresentationControllerDelegate
+  // MARK: UIViewControllerTransitioningDelegate
 
-  func sheetPresentationControllerDidChangeSelectedDetentIdentifier(_ sheet: UISheetPresentationController) {
-    guard let identifier = sheet.selectedDetentIdentifier,
-          let index = detentIdentifiers.firstIndex(of: identifier) else { return }
-    presentationDelegate?.modalPresentationDidChangeDetent(index)
+  func animationController(
+    forPresented presented: UIViewController,
+    presenting: UIViewController,
+    source: UIViewController
+  ) -> UIViewControllerAnimatedTransitioning? {
+    SheetTransition(presenting: true)
   }
 
-  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
-    presentationDelegate?.modalPresentationDidDismissInteractively()
+  func animationController(forDismissed dismissed: UIViewController) -> UIViewControllerAnimatedTransitioning? {
+    SheetTransition(presenting: false)
   }
 
-  // MARK: Sheet configuration
-
-  private func configureSheet(selectingDetentAt index: Int) {
-    guard let sheet = sheetPresentationController else { return }
-    sheet.delegate = self
-    // Blocks swipe-to-dismiss while still allowing drags between detents.
-    isModalInPresentation = !config.dismissOnSwipe
-    sheet.prefersGrabberVisible = config.grabberVisible
-    sheet.preferredCornerRadius = config.cornerRadius
-    sheet.prefersScrollingExpandsWhenScrolledToEdge = true
-    sheet.prefersEdgeAttachedInCompactHeight = true
-
-    let (detents, identifiers) = makeDetents()
-    sheet.detents = detents
-    detentIdentifiers = identifiers
-    // `BackdropView` replaces the system dimming so color, opacity, blur and
-    // tap-outside are configurable. Undimming up to `.large` turns it off.
-    sheet.largestUndimmedDetentIdentifier = .large
-    if identifiers.indices.contains(index) {
-      sheet.selectedDetentIdentifier = identifiers[index]
+  /// Slides the sheet in or out; a swipe dismissal keeps its release velocity.
+  fileprivate func animateTransition(toOffscreen offscreen: Bool, animated: Bool, duration: TimeInterval, completion: @escaping () -> Void) {
+    let from = sheetView.frame.minY
+    let velocity = offscreen ? releaseVelocity : 0
+    releaseVelocity = 0
+    isOffscreen = offscreen
+    dragTop = nil
+    guard animated else {
+      layoutSheet()
+      completion()
+      return
     }
+    animate(
+      distance: currentTop - from,
+      velocity: velocity,
+      damping: offscreen ? 1 : 0.88,
+      duration: duration,
+      animations: { self.layoutSheet() },
+      completion: completion
+    )
   }
 
-  private func makeDetents() -> ([UISheetPresentationController.Detent], [UISheetPresentationController.Detent.Identifier]) {
-    let requested = config.detents.isEmpty ? [.fitcontent] : config.detents
-    guard #available(iOS 16.0, *) else {
-      // iOS 15 only has the two system detents, and `Detent.identifier` is iOS 16+.
-      let identifiers: [UISheetPresentationController.Detent.Identifier] = requested.map { $0 == .large ? .large : .medium }
-      return (identifiers.map { $0 == .large ? .large() : .medium() }, identifiers)
-    }
-    let detents = requested.enumerated().map { index, detent in
-      UISheetPresentationController.Detent.custom(
-        identifier: .init("nitro.\(index).\(detent.stringValue)")
-      ) { [weak self] context in
-        self?.resolve(detent, maximum: context.maximumDetentValue)
-      }
-    }
-    return (detents, detents.map(\.identifier))
+  // MARK: Layout
+
+  private var detents: [SheetDetent] {
+    config.detents.isEmpty ? [.fitcontent] : config.detents
   }
 
-  /// Detent heights exclude the bottom safe area; UIKit adds it below.
-  private func resolve(_ detent: SheetDetent, maximum: CGFloat) -> CGFloat {
-    maximumDetentValue = maximum
+  /// Tallest height the content may occupy (excludes the bottom safe area).
+  private var maximumDetentValue: CGFloat {
+    let insets = view.safeAreaInsets
+    return max(0, view.bounds.height - insets.top - insets.bottom - Self.topGap)
+  }
+
+  private var keyboardLift: CGFloat {
+    config.keyboardBehavior == .none ? 0 : max(0, keyboardHeight - view.safeAreaInsets.bottom)
+  }
+
+  private func height(of detent: SheetDetent) -> CGFloat {
+    let maximum = maximumDetentValue
     switch detent {
     case .small: return maximum * 0.25
     case .medium: return maximum * 0.5
@@ -167,43 +199,91 @@ final class SheetViewController: UIViewController, ModalPresenting, UISheetPrese
     }
   }
 
-  // MARK: Backdrop
-
-  private func installBackdrop() {
-    guard let container = sheetPresentationController?.containerView, backdrop.superview !== container else { return }
-    backdrop.frame = container.bounds
-    backdrop.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    backdrop.alpha = 0
-    container.insertSubview(backdrop, at: 0)
+  /// Sheet top when resting on `detents[index]`. The bottom safe area is
+  /// added below the content.
+  private func restingTop(for index: Int) -> CGFloat {
+    let detent = detents[min(max(index, 0), detents.count - 1)]
+    let top = view.bounds.height - view.safeAreaInsets.bottom - keyboardLift - height(of: detent)
+    return max(top, view.safeAreaInsets.top + Self.topGap)
   }
 
-  /// Rides the transition coordinator so the backdrop tracks interactive
-  /// dismissals frame-by-frame and restores itself if the swipe is cancelled.
-  private func animateBackdrop(to alpha: CGFloat) {
-    guard let coordinator = transitionCoordinator else {
-      backdrop.alpha = alpha
-      return
+  private var detentTops: [CGFloat] {
+    detents.indices.map(restingTop(for:))
+  }
+
+  private var currentTop: CGFloat {
+    if isOffscreen { return view.bounds.height }
+    return dragTop ?? restingTop(for: selectedIndex)
+  }
+
+  private func layoutSheet() {
+    let bounds = view.bounds
+    let width = Self.width(for: bounds.width, sizeClass: traitCollection.horizontalSizeClass)
+    let top = currentTop
+    backdrop.frame = bounds
+    sheetView.frame = CGRect(x: (bounds.width - width) / 2, y: top, width: width, height: bounds.height + Self.overscroll)
+    contentView.frame = CGRect(x: 0, y: 0, width: width, height: maximumDetentValue)
+    grabber.frame = CGRect(
+      origin: CGPoint(x: (width - Self.grabberSize.width) / 2, y: 5),
+      size: Self.grabberSize
+    )
+    backdrop.alpha = backdropAlpha(forTop: top)
+  }
+
+  /// Fully dimmed at every detent; fades out below the lowest one.
+  private func backdropAlpha(forTop top: CGFloat) -> CGFloat {
+    let bottom = view.bounds.height
+    guard let lowest = detentTops.max(), bottom > lowest else { return top >= bottom ? 0 : 1 }
+    return min(max((bottom - top) / (bottom - lowest), 0), 1)
+  }
+
+  private func applyAppearance() {
+    backdrop.configure(color: config.backdropColor, opacity: config.backdropOpacity, blurRadius: config.backdropBlurRadius)
+    sheetView.backgroundColor = config.contentBackgroundColor
+    sheetView.layer.cornerRadius = config.cornerRadius ?? Self.defaultCornerRadius
+    grabber.isHidden = !config.grabberVisible
+  }
+
+  private func animateToRest() {
+    guard isViewLoaded, drag == nil, !isOffscreen else { return }
+    dragTop = nil
+    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+      self.view.setNeedsLayout()
+      self.view.layoutIfNeeded()
     }
-    let initial = backdrop.alpha
-    coordinator.animate(alongsideTransition: { [backdrop] _ in
-      backdrop.alpha = alpha
-    }, completion: { [backdrop] context in
-      if context.isCancelled {
-        backdrop.alpha = initial
-      }
-    })
+  }
+
+  private func animate(
+    distance: CGFloat,
+    velocity: CGFloat,
+    damping: CGFloat = 0.9,
+    duration: TimeInterval = 0.45,
+    animations: @escaping () -> Void,
+    completion: (() -> Void)? = nil
+  ) {
+    // UIKit expects the initial velocity relative to the distance travelled.
+    let relativeVelocity = abs(distance) > 1 ? min(max(velocity / distance, -30), 30) : 0
+    UIView.animate(
+      withDuration: duration,
+      delay: 0,
+      usingSpringWithDamping: damping,
+      initialSpringVelocity: relativeVelocity,
+      options: [.allowUserInteraction, .beginFromCurrentState],
+      animations: animations,
+      completion: { _ in completion?() }
+    )
   }
 
   // MARK: Content area
 
   private func reportContentArea() {
     guard isViewLoaded, view.bounds.width > 0 else { return }
-    let maximum = maximumDetentValue ?? view.window.map(Self.estimatedMaximumDetentValue(in:)) ?? view.bounds.height
-    var height = Self.contentHeight(for: config.detents, maximum: maximum)
+    var height = Self.contentHeight(for: config.detents, maximum: maximumDetentValue)
     if config.keyboardBehavior == .resize {
-      height -= max(0, keyboardHeight - view.safeAreaInsets.bottom)
+      height -= keyboardLift
     }
-    presentationDelegate?.modalPresentationDidChangeContentArea(CGSize(width: view.bounds.width, height: max(height, 0)))
+    let width = Self.width(for: view.bounds.width, sizeClass: traitCollection.horizontalSizeClass)
+    presentationDelegate?.modalPresentationDidChangeContentArea(CGSize(width: width, height: max(height, 0)))
   }
 
   /// Height the content may occupy at the largest of `detents`.
@@ -214,31 +294,255 @@ final class SheetViewController: UIViewController, ModalPresenting, UISheetPrese
     return detents.contains(.medium) ? maximum * 0.5 : maximum * 0.25
   }
 
-  /// Best guess of UIKit's `maximumDetentValue` before the sheet is on screen.
+  /// Best guess of `maximumDetentValue` before the sheet is on screen.
   static func estimatedMaximumDetentValue(in window: UIWindow) -> CGFloat {
     let insets = window.safeAreaInsets
-    return window.bounds.height - insets.top - insets.bottom - 10
+    return window.bounds.height - insets.top - insets.bottom - topGap
   }
 
   /// Best guess of the sheet width before it is on screen.
   static func estimatedWidth(in window: UIWindow) -> CGFloat {
-    window.traitCollection.horizontalSizeClass == .regular ? min(window.bounds.width, 704) : window.bounds.width
+    width(for: window.bounds.width, sizeClass: window.traitCollection.horizontalSizeClass)
+  }
+
+  private static func width(for available: CGFloat, sizeClass: UIUserInterfaceSizeClass) -> CGFloat {
+    sizeClass == .regular ? min(available, regularMaxWidth) : available
+  }
+
+  // MARK: Dragging
+
+  func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    guard let pan = gestureRecognizer as? UIPanGestureRecognizer,
+          !isBeingPresented, !isBeingDismissed, !isOffscreen else { return false }
+    let velocity = pan.velocity(in: view)
+    return abs(velocity.y) > abs(velocity.x)
+  }
+
+  /// Scroll views inside the content keep scrolling; `handlePan` decides
+  /// frame by frame whether the sheet or the scroll view moves.
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+  ) -> Bool {
+    guard let scrollView = other.view as? UIScrollView else { return false }
+    return other === scrollView.panGestureRecognizer && scrollView.isDescendant(of: sheetView)
+  }
+
+  @objc private func handlePan(_ pan: UIPanGestureRecognizer) {
+    switch pan.state {
+    case .began:
+      // Grab the sheet where it is, even mid-animation.
+      let top = sheetView.layer.presentation()?.frame.minY ?? sheetView.frame.minY
+      sheetView.layer.removeAllAnimations()
+      backdrop.layer.removeAllAnimations()
+      let translation = pan.translation(in: sheetView)
+      let location = pan.location(in: sheetView)
+      let start = CGPoint(x: location.x - translation.x, y: location.y - translation.y)
+      var state = DragState(rawTop: top)
+      state.lastTranslation = pan.translation(in: view).y
+      state.scrollView = verticalScrollView(at: start)
+      if let scrollView = state.scrollView {
+        lockedOffsetY = scrollView.contentOffset.y
+      }
+      drag = state
+      dragTop = top
+      layoutSheet()
+
+    case .changed:
+      guard var state = drag, let minTop = detentTops.min() else { return }
+      let translation = pan.translation(in: view).y
+      let delta = translation - state.lastTranslation
+      state.lastTranslation = translation
+
+      if let scrollView = state.scrollView {
+        // Up: expand the sheet before scrolling. Down: scroll back to the top
+        // before collapsing the sheet.
+        let drive = delta < 0 ? state.rawTop > minTop + 0.5 : scrollView.isScrolledToTop
+        if drive {
+          state.rawTop = max(state.rawTop + delta, minTop)
+          lockScroll(scrollView, at: delta < 0 ? lockedOffsetY : scrollView.topOffsetY)
+        } else {
+          unlockScroll()
+          lockedOffsetY = scrollView.contentOffset.y
+        }
+        state.sheetDrove = drive
+      } else {
+        state.rawTop += delta
+        state.sheetDrove = true
+      }
+      drag = state
+      dragTop = constrained(state.rawTop)
+      layoutSheet()
+
+    case .ended, .cancelled, .failed:
+      guard let state = drag else { return }
+      drag = nil
+      let velocity = state.sheetDrove ? pan.velocity(in: view).y : 0
+      endDrag(at: dragTop ?? currentTop, velocity: velocity, holdingScroll: state.sheetDrove)
+
+    default:
+      break
+    }
+  }
+
+  private func endDrag(at top: CGFloat, velocity: CGFloat, holdingScroll: Bool) {
+    if !holdingScroll {
+      unlockScroll()
+    }
+    let tops = detentTops
+    guard let lowest = tops.max() else { return }
+    // Where a fling of this velocity would come to rest.
+    let projected = top + velocity * 0.2
+
+    if config.dismissOnSwipe, velocity >= 0, projected > lowest + (view.bounds.height - lowest) / 2 {
+      releaseVelocity = velocity
+      presentationDelegate?.modalPresentationDidRequestSwipeDismiss()
+      if isBeingDismissed {
+        return
+      }
+      releaseVelocity = 0
+    }
+
+    let index = tops.indices.min { abs(tops[$0] - projected) < abs(tops[$1] - projected) } ?? selectedIndex
+    if index != selectedIndex {
+      selectedIndex = index
+      presentationDelegate?.modalPresentationDidChangeDetent(index)
+    }
+    dragTop = nil
+    animate(distance: restingTop(for: index) - top, velocity: velocity, animations: { self.layoutSheet() }) { [weak self] in
+      guard let self, self.drag == nil else { return }
+      self.unlockScroll()
+    }
+  }
+
+  /// Rubber-bands above the tallest detent, and below the lowest one when
+  /// swiping cannot dismiss.
+  private func constrained(_ top: CGFloat) -> CGFloat {
+    let tops = detentTops
+    guard let minTop = tops.min(), let maxTop = tops.max() else { return top }
+    let dimension = max(view.bounds.height, 1)
+    if top < minTop {
+      return minTop - Self.rubberBand(minTop - top, dimension: dimension)
+    }
+    if !config.dismissOnSwipe, top > maxTop {
+      return maxTop + Self.rubberBand(top - maxTop, dimension: dimension)
+    }
+    return top
+  }
+
+  private static func rubberBand(_ offset: CGFloat, dimension: CGFloat) -> CGFloat {
+    (1 - 1 / (offset * 0.55 / dimension + 1)) * dimension
+  }
+
+  /// The innermost vertically scrollable view under `point` (in `sheetView`).
+  private func verticalScrollView(at point: CGPoint) -> UIScrollView? {
+    var candidate = sheetView.hitTest(point, with: nil)
+    while let current = candidate, current !== sheetView {
+      if let scrollView = current as? UIScrollView, scrollView.isScrollEnabled, scrollView.canScrollVertically {
+        return scrollView
+      }
+      candidate = current.superview
+    }
+    return nil
+  }
+
+  /// Pins the scroll view's offset while the sheet moves, so content does not
+  /// scroll (or bounce) at the same time.
+  private func lockScroll(_ scrollView: UIScrollView, at offsetY: CGFloat) {
+    if lockedScrollView !== scrollView {
+      unlockScroll()
+      lockedScrollView = scrollView
+    }
+    lockedOffsetY = offsetY
+    if scrollView.contentOffset.y != offsetY {
+      scrollView.contentOffset.y = offsetY
+    }
+    guard scrollLock == nil else { return }
+    scrollLock = scrollView.observe(\.contentOffset) { [weak self] scrollView, _ in
+      guard let self, scrollView.contentOffset.y != self.lockedOffsetY else { return }
+      scrollView.contentOffset.y = self.lockedOffsetY
+    }
+  }
+
+  private func unlockScroll() {
+    guard let scrollView = lockedScrollView else { return }
+    scrollLock?.invalidate()
+    scrollLock = nil
+    lockedScrollView = nil
+    // Stops any deceleration left over from a fling that moved the sheet.
+    scrollView.setContentOffset(scrollView.contentOffset, animated: false)
   }
 
   // MARK: Keyboard
 
-  // UIKit already lifts sheets above the keyboard; we only track the height
-  // so `resize` can shrink the area reported to the content.
   @objc private func keyboardWillChangeFrame(_ notification: Notification) {
     guard isViewLoaded, let window = view.window,
           let frame = (notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
     let keyboard = window.convert(frame, from: window.screen.coordinateSpace)
-    keyboardHeight = max(0, window.bounds.maxY - keyboard.minY)
-    reportContentArea()
+    updateKeyboardHeight(max(0, window.bounds.maxY - keyboard.minY), notification: notification)
   }
 
   @objc private func keyboardWillHide(_ notification: Notification) {
-    keyboardHeight = 0
-    reportContentArea()
+    updateKeyboardHeight(0, notification: notification)
+  }
+
+  private func updateKeyboardHeight(_ height: CGFloat, notification: Notification) {
+    guard isViewLoaded, height != keyboardHeight else { return }
+    keyboardHeight = height
+    guard drag == nil else { return }
+    notification.animateAlongsideKeyboard {
+      self.view.setNeedsLayout()
+      self.view.layoutIfNeeded()
+    }
+  }
+}
+
+/// Slide transition for `SheetViewController`.
+private final class SheetTransition: NSObject, UIViewControllerAnimatedTransitioning {
+  private let presenting: Bool
+
+  init(presenting: Bool) {
+    self.presenting = presenting
+  }
+
+  func transitionDuration(using transitionContext: UIViewControllerContextTransitioning?) -> TimeInterval {
+    presenting ? 0.5 : 0.35
+  }
+
+  func animateTransition(using transitionContext: UIViewControllerContextTransitioning) {
+    let key: UITransitionContextViewControllerKey = presenting ? .to : .from
+    guard let sheet = transitionContext.viewController(forKey: key) as? SheetViewController else {
+      transitionContext.completeTransition(!transitionContext.transitionWasCancelled)
+      return
+    }
+
+    if presenting {
+      sheet.view.frame = transitionContext.finalFrame(for: sheet)
+      transitionContext.containerView.addSubview(sheet.view)
+      sheet.view.layoutIfNeeded()
+    }
+
+    sheet.animateTransition(
+      toOffscreen: !presenting,
+      animated: transitionContext.isAnimated,
+      duration: transitionDuration(using: transitionContext)
+    ) {
+      transitionContext.completeTransition(!transitionContext.transitionWasCancelled)
+    }
+  }
+}
+
+private extension UIScrollView {
+  var topOffsetY: CGFloat {
+    -adjustedContentInset.top
+  }
+
+  var isScrolledToTop: Bool {
+    contentOffset.y <= topOffsetY + 0.5
+  }
+
+  var canScrollVertically: Bool {
+    alwaysBounceVertical
+      || contentSize.height + adjustedContentInset.top + adjustedContentInset.bottom > bounds.height + 0.5
   }
 }

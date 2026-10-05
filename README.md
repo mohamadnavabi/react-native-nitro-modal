@@ -13,7 +13,7 @@
 
 ---
 
-`react-native-nitro-modal` renders your React content inside the platform's own modal primitives — `UISheetPresentationController` on iOS and Material `BottomSheetBehavior` on Android — so gestures, detent snapping, keyboard handling and transitions are handled natively, not re-implemented in JavaScript.
+`react-native-nitro-modal` renders your React content inside native modal presentations — an edge-attached UIKit sheet on iOS and Material `BottomSheetBehavior` on Android — so gestures, detent snapping, keyboard handling and transitions are handled natively, not re-implemented in JavaScript.
 
 ## Features
 
@@ -242,8 +242,7 @@ import type {
 
 **iOS**
 
-- Bottom sheets use `UISheetPresentationController`.
-- On iOS 15, only the system `medium` and `large` detents exist; `small` and `fitContent` fall back to `medium`.
+- Bottom sheets are a custom edge-attached presentation (native pan gesture, spring snapping and scroll-view hand-off) instead of `UISheetPresentationController`, which on iOS 26+ always floats partial-height sheets inset from the screen edges. All detents work on every supported iOS version.
 - UIKit has no public blur-radius API, so `backdropBlur` is approximated by blending a thin system material.
 
 **Android**

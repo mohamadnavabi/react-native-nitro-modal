@@ -312,11 +312,10 @@ extension HybridNitroModal: ModalPresentationDelegate {
     reconcile()
   }
 
-  func modalPresentationDidDismissInteractively() {
-    guard phase == .presented else { return }
-    wantsOpen = false
-    dismissReason = .swipe
-    finishDismiss()
+  func modalPresentationDidRequestSwipeDismiss() {
+    guard config.dismissOnSwipe, phase == .presenting || phase == .presented else { return }
+    requestDismiss(.swipe)
+    reconcile()
   }
 
   func modalPresentationDidChangeDetent(_ index: Int) {
