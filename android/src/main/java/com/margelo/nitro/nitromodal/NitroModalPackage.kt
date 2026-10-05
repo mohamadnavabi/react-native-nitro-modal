@@ -6,8 +6,6 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfoProvider
 import com.facebook.react.uimanager.ViewManager
 
-import com.margelo.nitro.nitromodal.views.HybridNitroModalManager
-
 class NitroModalPackage : BaseReactPackage() {
     override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? {
         return null
@@ -18,7 +16,8 @@ class NitroModalPackage : BaseReactPackage() {
     }
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
-        return listOf(HybridNitroModalManager())
+        // Not nitrogen's generated HybridNitroModalManager: the modal needs children.
+        return listOf(NitroModalViewManager())
     }
 
     companion object {
