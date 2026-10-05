@@ -211,7 +211,9 @@ internal class BottomSheetPresenter(
       }
     }
 
-    val areaHeight = sheetHeight - bottomInset -
+    val availableHeight =
+      if (SheetDetent.FITCONTENT in requested) maxContentHeight else sheetHeight - bottomInset
+    val areaHeight = availableHeight -
       if (config.keyboardBehavior == KeyboardBehavior.RESIZE) keyboardOverlap else 0
     val sheetWidth = minOf(coordinator.width, behavior.maxWidth.takeIf { it > 0 } ?: Int.MAX_VALUE)
     reportContentArea(sheetWidth - systemInsets.left - systemInsets.right, areaHeight)
