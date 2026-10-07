@@ -6,7 +6,12 @@ import type {
   NitroModalMethods,
   NitroModalProps,
 } from '../NitroModal.nitro';
-import { canUseDOM, estimateViewport, readSafeAreaInsets } from './dom';
+import {
+  canUseDOM,
+  estimateViewport,
+  inlineInsets,
+  readSafeAreaInsets,
+} from './dom';
 import { isSameConfig, makeConfig, type ModalConfig } from './ModalConfig';
 import type {
   ModalElements,
@@ -58,6 +63,8 @@ export class ModalController implements PresenterListener {
   private isAttached = false;
   private presenter: ModalPresenter | null = null;
   private elements: ModalElements | null = null;
+  /** Inline: the element the sheet fills. */
+  private host: HTMLElement | null = null;
   private lastContentArea: ModalContentArea | null = null;
 
   /** `setMounted` renders (or removes) the modal's elements. */
@@ -107,6 +114,15 @@ export class ModalController implements PresenterListener {
       } else {
         this.requestDismiss('programmatic');
       }
+    }
+  }
+
+  /** Inline: the element the sheet fills, rendered in place. */
+  hostDidChange(host: HTMLElement | null) {
+    if (host === this.host) return;
+    this.host = host;
+    if (!this.presenter) {
+      this.reportEstimatedContentArea();
     }
   }
 
@@ -273,6 +289,10 @@ export class ModalController implements PresenterListener {
     this.props?.onDetentChange?.(index);
   }
 
+  onPullToRefresh() {
+    this.props?.onPullToRefresh?.();
+  }
+
   onContentAreaChange(width: number, height: number) {
     const area = { width: Math.floor(width), height: Math.floor(height) };
     const last = this.lastContentArea;
@@ -288,12 +308,25 @@ export class ModalController implements PresenterListener {
   private reportEstimatedContentArea() {
     const { config } = this;
     if (!canUseDOM || !this.isAttached || !config) return;
+    if (config.isInline) {
+      const { host } = this;
+      if (!host || host.clientWidth === 0 || host.clientHeight === 0) return;
+      const viewport = { width: host.clientWidth, height: host.clientHeight };
+      const area = sheetContentArea(
+        config.detents,
+        viewport,
+        inlineInsets(host),
+        true
+      );
+      this.onContentAreaChange(area.width, area.height);
+      return;
+    }
     const viewport = estimateViewport();
     const insets = readSafeAreaInsets();
     const area =
       config.mode === 'popup'
         ? popupContentArea(viewport, insets)
-        : sheetContentArea(config.detents, viewport, insets);
+        : sheetContentArea(config.detents, viewport, insets, false);
     this.onContentAreaChange(area.width, area.height);
   }
 

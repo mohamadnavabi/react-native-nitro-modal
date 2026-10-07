@@ -1,19 +1,23 @@
 /// <reference lib="dom" />
 
 import {
+  useCallback,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { Modal } from 'react-native';
+import { Modal, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { ReactNativeView } from 'react-native-nitro-modules';
 import type { NitroModalMethods, NitroModalProps } from './NitroModal.nitro';
+import { clipOverflow } from './web/dom';
 import { ModalController } from './web/ModalController';
 
 interface WebNitroModalViewProps extends NitroModalProps {
   hybridRef?: (instance: NitroModalMethods) => void;
+  /** Inline: the frame the sheet fills. */
+  style?: StyleProp<ViewStyle>;
   children?: ReactNode;
 }
 
@@ -27,9 +31,13 @@ export function callback<T>(func: T): T {
  * Native Web's `Modal` (a portal with focus trapping, Escape handling and
  * stacking with other modals) and is laid out and animated by the presenters
  * in `./web`. In place, it renders nothing.
+ *
+ * An inline sheet renders in place instead: a view laid out with `style`,
+ * holding the sheet's elements.
  */
 function WebNitroModalView(props: WebNitroModalViewProps) {
   const { hybridRef, children } = props;
+  const isInline = props.isInline && props.mode === 'bottomSheet';
   const [mounted, setMounted] = useState(false);
   const [controller] = useState(() => new ModalController(setMounted));
   const overlay = useRef<HTMLDivElement>(null);
@@ -69,10 +77,46 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
     }
   });
 
-  if (!mounted) return null;
+  const hostRef = useCallback(
+    (node: unknown) => {
+      controller.hostDidChange(node instanceof HTMLElement ? node : null);
+    },
+    [controller]
+  );
 
   // Styles set here never change; the presenters write sizes, positions,
   // colors and animated values straight to the elements.
+  const layer = mounted ? (
+    // Focusable so the modal's focus trap lands here first rather than on the first input.
+    <div
+      ref={overlay}
+      tabIndex={-1}
+      style={
+        isInline
+          ? { ...styles.inlineOverlay, overflow: clipOverflow() }
+          : styles.overlay
+      }
+    >
+      <div ref={backdrop} aria-hidden style={styles.backdrop} />
+      <div ref={surface} style={styles.surface}>
+        <div ref={content} style={styles.content}>
+          {children}
+        </div>
+        <div ref={grabber} aria-hidden style={styles.grabber} />
+      </div>
+    </div>
+  ) : null;
+
+  if (isInline) {
+    return (
+      <View ref={hostRef} style={props.style} pointerEvents="box-none">
+        {layer}
+      </View>
+    );
+  }
+
+  if (!layer) return null;
+
   return (
     <Modal
       visible
@@ -80,16 +124,7 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
       animationType="none"
       onRequestClose={controller.handleBackPress}
     >
-      {/* Focusable so the modal's focus trap lands here first rather than on the first input. */}
-      <div ref={overlay} tabIndex={-1} style={styles.overlay}>
-        <div ref={backdrop} aria-hidden style={styles.backdrop} />
-        <div ref={surface} style={styles.surface}>
-          <div ref={content} style={styles.content}>
-            {children}
-          </div>
-          <div ref={grabber} aria-hidden style={styles.grabber} />
-        </div>
-      </div>
+      {layer}
     </Modal>
   );
 }
@@ -99,6 +134,13 @@ const styles = {
     position: 'fixed',
     inset: 0,
     outline: 'none',
+  },
+  // Fills the host view; the sheet hides below its bottom edge.
+  inlineOverlay: {
+    position: 'absolute',
+    inset: 0,
+    outline: 'none',
+    pointerEvents: 'none',
   },
   backdrop: {
     position: 'absolute',

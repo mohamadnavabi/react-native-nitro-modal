@@ -21,11 +21,21 @@ import type {
   KeyboardBehavior,
   ModalContentArea,
   ModalMode,
+  NamedSheetDetent,
   NitroModal as NitroModalHybridView,
   PopupAnimation,
   SheetDetent,
 } from './NitroModal.nitro';
 import { callback, NitroModalView } from './NitroModalView';
+
+/**
+ * Where a `bottomSheet` lives.
+ * - `modal`: presented over the whole app, with a backdrop.
+ * - `inline`: inside the component's own frame (`style`), as part of your
+ *   screen. No backdrop, the views behind it stay interactive, and the user
+ *   can't dismiss it.
+ */
+export type ModalPresentation = 'modal' | 'inline';
 
 export interface NitroModalRef {
   /** Opens the modal. Only for uncontrolled usage (no `isOpen` prop). */
@@ -45,7 +55,23 @@ export interface NitroModalProps {
   isOpen?: boolean;
   /** @default 'bottomSheet' */
   mode?: ModalMode;
-  /** Sheet heights, smallest first. Android uses at most three. @default ['fitContent'] */
+  /**
+   * `inline` keeps a `bottomSheet` inside this component's frame, like a
+   * persistent sheet that is part of the screen. Popups are always modal.
+   * @default 'modal'
+   */
+  presentation?: ModalPresentation;
+  /**
+   * Inline only: the frame the sheet lives in, laid out like any view.
+   * The sheet rests against its bottom edge and its largest detent reaches its
+   * top edge. @default StyleSheet.absoluteFill
+   */
+  style?: StyleProp<ViewStyle>;
+  /**
+   * Sheet heights, smallest first: named sizes, or the content height in
+   * dp/pt above the bottom safe area. Android uses at most three.
+   * @default ['fitContent']
+   */
   detents?: SheetDetent[];
   /** @default 0 */
   initialDetentIndex?: number;
@@ -78,6 +104,13 @@ export interface NitroModalProps {
   onDetentChange?: (index: number) => void;
   onBackdropPress?: () => void;
   onBackButtonPress?: () => void;
+  /**
+   * Pull-to-refresh: the user dragged the sheet down past its lowest detent
+   * and let go. Only for sheets that can't be swiped away (inline, or
+   * `dismissOnSwipe={false}`), and only from a gesture that starts with the
+   * sheet resting on its lowest detent.
+   */
+  onPullToRefresh?: () => void;
   children?: ReactNode;
   testID?: string;
   ref?: Ref<NitroModalRef>;
@@ -85,6 +118,13 @@ export interface NitroModalProps {
 
 const DEFAULT_DETENTS: SheetDetent[] = ['fitContent'];
 const BLACK = 0xff000000;
+
+function parseDetent(value: string): SheetDetent {
+  const points = Number(value);
+  return value !== '' && Number.isFinite(points)
+    ? points
+    : (value as NamedSheetDetent);
+}
 
 function toNativeColor(color: ColorValue | undefined): number | undefined {
   if (color == null) return undefined;
@@ -96,6 +136,8 @@ function toNativeColor(color: ColorValue | undefined): number | undefined {
 export function NitroModal({
   isOpen,
   mode = 'bottomSheet',
+  presentation = 'modal',
+  style,
   detents = DEFAULT_DETENTS,
   initialDetentIndex = 0,
   backdropColor = 'black',
@@ -115,11 +157,13 @@ export function NitroModal({
   onDetentChange,
   onBackdropPress,
   onBackButtonPress,
+  onPullToRefresh,
   children,
   testID,
   ref,
 }: NitroModalProps) {
   const isControlled = isOpen !== undefined;
+  const isInline = presentation === 'inline' && mode === 'bottomSheet';
   const [internalOpen, setInternalOpen] = useState(false);
   const open = isControlled ? isOpen : internalOpen;
 
@@ -134,6 +178,10 @@ export function NitroModal({
   const renderContent = open || sessionActive;
 
   const [area, setArea] = useState<ModalContentArea | null>(null);
+  // Inline (iOS/Android): where the sheet's top rests in the host. The content
+  // is laid out there so `measure()`, which presses rely on, matches the
+  // screen; native cancels the offset out on screen.
+  const [restingTop, setRestingTop] = useState(0);
   const hybridRef = useRef<NitroModalHybridView | null>(null);
 
   // Native callbacks are created once (stable props, no native updates on
@@ -145,6 +193,7 @@ export function NitroModal({
     onDetentChange,
     onBackdropPress,
     onBackButtonPress,
+    onPullToRefresh,
   });
   useLayoutEffect(() => {
     latest.current = {
@@ -154,6 +203,7 @@ export function NitroModal({
       onDetentChange,
       onBackdropPress,
       onBackButtonPress,
+      onPullToRefresh,
     };
   });
 
@@ -179,6 +229,12 @@ export function NitroModal({
       }),
       onBackButtonPress: callback(() => {
         latest.current.onBackButtonPress?.();
+      }),
+      onPullToRefresh: callback(() => {
+        latest.current.onPullToRefresh?.();
+      }),
+      onRestingTopChange: callback((top: number) => {
+        setRestingTop(top);
       }),
       onContentAreaChange: callback((next: ModalContentArea) => {
         setArea((current) =>
@@ -220,7 +276,7 @@ export function NitroModal({
   // Arrays are diffed by identity, so keep one instance per distinct value.
   const detentsKey = detents.join(',');
   const nativeDetents = useMemo(
-    () => [...new Set(detentsKey.split(','))] as SheetDetent[],
+    () => [...new Set(detentsKey.split(','))].map(parseDetent),
     [detentsKey]
   );
 
@@ -240,9 +296,11 @@ export function NitroModal({
 
   return (
     <NitroModalView
-      style={styles.host}
+      style={isInline ? [StyleSheet.absoluteFill, style] : styles.host}
+      pointerEvents={isInline ? 'box-none' : undefined}
       isOpen={open}
       mode={mode}
+      isInline={isInline}
       detents={nativeDetents}
       initialDetentIndex={initialDetentIndex}
       backdropColor={toNativeColor(backdropColor) ?? BLACK}
@@ -256,13 +314,19 @@ export function NitroModal({
       contentBackgroundColor={toNativeColor(backgroundColor)}
       keyboardBehavior={keyboardBehavior}
       popupAnimation={popupAnimation}
+      pullToRefreshEnabled={onPullToRefresh != null}
       {...nativeCallbacks}
     >
       {renderContent ? (
         <View
           collapsable={false}
           testID={testID}
-          style={[styles.container, containerStyle, contentContainerStyle]}
+          style={[
+            styles.container,
+            containerStyle,
+            contentContainerStyle,
+            isInline && restingTop > 0 ? { top: restingTop } : null,
+          ]}
         >
           {children}
         </View>

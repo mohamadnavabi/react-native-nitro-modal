@@ -22,6 +22,7 @@ export default function App() {
   const [listOpen, setListOpen] = useState(false);
   const [popupOpen, setPopupOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
+  const [inlineOpen, setInlineOpen] = useState(true);
   const [lastEvent, setLastEvent] = useState('—');
   const imperativeSheet = useRef<NitroModalRef>(null);
 
@@ -59,6 +60,10 @@ export default function App() {
       <Button
         title="Imperative sheet (ref)"
         onPress={() => imperativeSheet.current?.present()}
+      />
+      <Button
+        title={inlineOpen ? 'Hide inline sheet' : 'Inline sheet'}
+        onPress={() => setInlineOpen((open) => !open)}
       />
 
       {/* 1. Content-sized sheet with a text field. */}
@@ -164,7 +169,32 @@ export default function App() {
         </View>
       </NitroModal>
 
-      {/* 5. Uncontrolled: opened and closed through the ref. */}
+      {/* 5. Inline: part of the screen, which stays usable above it. Pull the
+          collapsed sheet down to refresh; rows log their presses. */}
+      <NitroModal
+        isOpen={inlineOpen}
+        presentation="inline"
+        style={styles.inlineArea}
+        detents={[240, 'large']}
+        showGrabber
+        onDetentChange={(index) => log(`inline detent → ${index}`)}
+        onPullToRefresh={() => log('inline pulled to refresh')}
+        onDismiss={() => log('inline hidden')}
+      >
+        <FlatList
+          data={ROWS}
+          keyExtractor={(item) => item}
+          nestedScrollEnabled
+          contentContainerStyle={styles.list}
+          renderItem={({ item }) => (
+            <Pressable onPress={() => log(`pressed ${item}`)}>
+              <Text style={styles.row}>{item}</Text>
+            </Pressable>
+          )}
+        />
+      </NitroModal>
+
+      {/* 6. Uncontrolled: opened and closed through the ref. */}
       <NitroModal
         ref={imperativeSheet}
         detents={['small', 'medium']}
@@ -256,6 +286,9 @@ const styles = StyleSheet.create({
   list: {
     paddingTop: 24,
     paddingBottom: 48,
+  },
+  inlineArea: {
+    top: 120,
   },
   row: {
     paddingHorizontal: 24,

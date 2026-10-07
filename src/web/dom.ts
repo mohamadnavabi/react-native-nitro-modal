@@ -53,6 +53,23 @@ export function readSafeAreaInsets(): Insets {
   };
 }
 
+/** The part of the safe area insets that `element` overlaps. */
+export function inlineInsets(element: Element): Insets {
+  const safeArea = readSafeAreaInsets();
+  const rect = element.getBoundingClientRect();
+  const clamp = (value: number, max: number) =>
+    Math.min(Math.max(value, 0), max);
+  return {
+    top: clamp(safeArea.top - rect.top, rect.height),
+    right: clamp(rect.right - (window.innerWidth - safeArea.right), rect.width),
+    bottom: clamp(
+      rect.bottom - (window.innerHeight - safeArea.bottom),
+      rect.height
+    ),
+    left: clamp(safeArea.left - rect.left, rect.width),
+  };
+}
+
 /**
  * Height of the on-screen keyboard over a layout viewport `layoutHeight` tall.
  * Mobile browsers keep the layout viewport and shrink the visual one.

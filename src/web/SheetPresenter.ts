@@ -13,8 +13,10 @@ import {
 import type { ModalConfig } from './ModalConfig';
 import { ModalPresenter, type PresenterListener } from './ModalPresenter';
 
-/** Gap kept above the sheet at its tallest. */
+/** Gap kept above a modal sheet at its tallest. */
 const TOP_GAP = 10;
+/** How far below its lowest detent the sheet must be pulled to refresh. */
+const REFRESH_THRESHOLD = 56;
 /**
  * Extra sheet height below the viewport so it stays attached to the bottom
  * edge while rubber-banding upward.
@@ -47,39 +49,77 @@ interface Drag {
   rawTop: number;
   /** Whether the last movement moved the sheet rather than the scroller. */
   sheetDrove: boolean;
+  /**
+   * The scroller moved during this gesture. It then keeps the downward part
+   * too: scrolled content goes back to its top, and only a new gesture moves
+   * the sheet.
+   */
+  contentScrolled: boolean;
+  /** Started with the sheet resting on its lowest detent, so pulling it further down refreshes. */
+  canRefresh: boolean;
+  /** Pulled far enough that letting go refreshes. */
+  refreshArmed: boolean;
   samples: { time: number; y: number }[];
 }
 
-function sheetWidth(available: number): number {
-  return Math.min(available, MAX_WIDTH);
+function sheetWidth(available: number, isInline: boolean): number {
+  return isInline ? available : Math.min(available, MAX_WIDTH);
 }
 
 /** Tallest height the content may occupy (excludes the bottom safe area). */
-function maximumDetentValue(viewportHeight: number, insets: Insets): number {
-  return Math.max(0, viewportHeight - insets.top - insets.bottom - TOP_GAP);
+function maximumDetentValue(
+  viewportHeight: number,
+  insets: Insets,
+  isInline: boolean
+): number {
+  const gap = isInline ? 0 : TOP_GAP;
+  return Math.max(0, viewportHeight - insets.top - insets.bottom - gap);
+}
+
+/** Content height at `detent`; `fitContent` uses the measured `fitting` height. */
+function detentHeight(
+  detent: SheetDetent,
+  maximum: number,
+  fitting: number
+): number {
+  switch (detent) {
+    case 'small':
+      return maximum * 0.25;
+    case 'medium':
+      return maximum * 0.5;
+    case 'large':
+      return maximum;
+    case 'fitContent':
+      return Math.min(Math.max(fitting, 1), maximum);
+    default:
+      return Number.isFinite(detent)
+        ? Math.min(Math.max(detent, 1), maximum)
+        : maximum;
+  }
 }
 
 /** Height the content may occupy at the largest of `detents`. */
 function contentHeight(detents: SheetDetent[], maximum: number): number {
-  if (
-    detents.length === 0 ||
-    detents.includes('large') ||
-    detents.includes('fitContent')
-  ) {
-    return maximum;
-  }
-  return detents.includes('medium') ? maximum * 0.5 : maximum * 0.25;
+  if (detents.length === 0) return maximum;
+  // `fitContent` content can grow up to the maximum.
+  return Math.max(
+    ...detents.map((detent) => detentHeight(detent, maximum, maximum))
+  );
 }
 
 /** Best guess of the content area before the sheet is on screen. */
 export function sheetContentArea(
   detents: SheetDetent[],
   viewport: Size,
-  insets: Insets
+  insets: Insets,
+  isInline: boolean
 ): Size {
   return {
-    width: sheetWidth(viewport.width),
-    height: contentHeight(detents, maximumDetentValue(viewport.height, insets)),
+    width: sheetWidth(viewport.width, isInline),
+    height: contentHeight(
+      detents,
+      maximumDetentValue(viewport.height, insets, isInline)
+    ),
   };
 }
 
@@ -200,7 +240,11 @@ export class SheetPresenter extends ModalPresenter {
   }
 
   private get maximumDetentValue(): number {
-    return maximumDetentValue(this.viewport.height, this.insets);
+    return maximumDetentValue(
+      this.viewport.height,
+      this.insets,
+      this.config.isInline
+    );
   }
 
   private get keyboardLift(): number {
@@ -210,17 +254,11 @@ export class SheetPresenter extends ModalPresenter {
   }
 
   private height(detent: SheetDetent): number {
-    const maximum = this.maximumDetentValue;
-    switch (detent) {
-      case 'small':
-        return maximum * 0.25;
-      case 'medium':
-        return maximum * 0.5;
-      case 'large':
-        return maximum;
-      case 'fitContent':
-        return Math.min(Math.max(this.contentSize.height, 1), maximum);
-    }
+    return detentHeight(
+      detent,
+      this.maximumDetentValue,
+      this.contentSize.height
+    );
   }
 
   /** Sheet top when resting on `detents[index]`. The bottom safe area is added below the content. */
@@ -233,7 +271,10 @@ export class SheetPresenter extends ModalPresenter {
       this.insets.bottom -
       this.keyboardLift -
       this.height(detent);
-    return Math.max(top, this.insets.top + TOP_GAP);
+    return Math.max(
+      top,
+      this.insets.top + (this.config.isInline ? 0 : TOP_GAP)
+    );
   }
 
   private get detentTops(): number[] {
@@ -242,7 +283,7 @@ export class SheetPresenter extends ModalPresenter {
 
   private layout() {
     const { surface, content, grabber } = this.elements!;
-    const width = sheetWidth(this.viewport.width);
+    const width = sheetWidth(this.viewport.width, this.config.isInline);
     const radius = `${this.config.cornerRadius ?? DEFAULT_CORNER_RADIUS}px`;
     Object.assign(surface.style, {
       left: `${(this.viewport.width - width) / 2}px`,
@@ -324,6 +365,9 @@ export class SheetPresenter extends ModalPresenter {
       active: false,
       rawTop: 0,
       sheetDrove: false,
+      contentScrolled: false,
+      canRefresh: false,
+      refreshArmed: false,
       samples: [],
     };
   }
@@ -351,8 +395,14 @@ export class SheetPresenter extends ModalPresenter {
 
   private activate(drag: Drag) {
     drag.active = true;
+    const isSettled = !this.top.isAnimating;
     this.top.stop();
     drag.rawTop = this.top.value;
+    drag.canRefresh =
+      this.config.pullToRefreshEnabled &&
+      !this.config.dismissOnSwipe &&
+      isSettled &&
+      Math.abs(drag.rawTop - Math.max(...this.detentTops)) < 1;
     const { surface } = this.elements!;
     // A native scroll on an ancestor makes React Native Web cancel the press
     // under the pointer, so dragging from a button doesn't leave it pressed.
@@ -379,21 +429,33 @@ export class SheetPresenter extends ModalPresenter {
     const { scroller } = drag;
     if (scroller) {
       // The browser's own scrolling is prevented for this gesture, so the
-      // content is scrolled here whenever the sheet can't move.
+      // content is scrolled here whenever the sheet can't move. Up: expand
+      // the sheet before scrolling. Down: scroll back to the top before
+      // collapsing the sheet, in a separate gesture.
       const minTop = Math.min(...this.detentTops);
       const drive =
-        delta < 0 ? drag.rawTop > minTop + 0.5 : scroller.scrollTop <= 0;
+        delta < 0
+          ? drag.rawTop > minTop + 0.5
+          : !drag.contentScrolled && scroller.scrollTop <= 0;
       if (drive) {
         drag.rawTop = Math.max(drag.rawTop + delta, minTop);
       } else {
         scroller.scrollTop -= delta;
+        if (delta !== 0) {
+          drag.contentScrolled = true;
+        }
       }
       drag.sheetDrove = drive;
     } else {
       drag.rawTop += delta;
       drag.sheetDrove = true;
     }
-    this.top.set(this.constrained(drag.rawTop));
+    const top = this.constrained(drag.rawTop);
+    if (drag.canRefresh) {
+      drag.refreshArmed =
+        top - Math.max(...this.detentTops) >= REFRESH_THRESHOLD;
+    }
+    this.top.set(top);
   }
 
   private release(drag: Drag) {
@@ -434,6 +496,9 @@ export class SheetPresenter extends ModalPresenter {
       this.listener.onDetentChange(index);
     }
     this.settle(SETTLE, velocity);
+    if (drag.refreshArmed) {
+      this.listener.onPullToRefresh();
+    }
   }
 
   /** Abandons the gesture without settling (the exit or the content takes over). */

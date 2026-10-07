@@ -71,6 +71,10 @@ export class AnimatedValue {
     return this.current;
   }
 
+  get isAnimating(): boolean {
+    return this.run != null;
+  }
+
   /** Jumps to `value`, cancelling any animation. */
   set(value: number) {
     this.stop();

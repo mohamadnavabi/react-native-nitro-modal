@@ -17,7 +17,9 @@
 
 ## Features
 
-- 📄 **Native bottom sheets** with multiple detents (`small`, `medium`, `large`, `fitContent`) and swipe-to-dismiss
+- 📄 **Native bottom sheets** with multiple detents (`small`, `medium`, `large`, `fitContent` or a height) and swipe-to-dismiss
+- 📌 **Inline sheets** — a persistent sheet that is part of your screen, with the views behind it still usable
+- 🔄 **Pull to refresh** — pulling a sheet down past its lowest detent
 - 🪟 **Centered popups** with native `scale` / `fade` transitions
 - 📏 **Content-sized sheets** — `fitContent` measures your React content and grows with it
 - ⌨️ **Keyboard aware** — the sheet or card follows the keyboard animation (`pan` or `resize`)
@@ -111,6 +113,38 @@ Detents are listed smallest first. `initialDetentIndex` selects where the sheet 
 </NitroModal>
 ```
 
+### Inline (persistent) bottom sheet
+
+`presentation="inline"` keeps the sheet inside the component's own frame instead of presenting it over the app — like a sheet that is part of the screen. There is no backdrop, the views behind it stay interactive, it moves with your screen during navigation, and the user can't dismiss it. Position the frame with `style` (it fills its parent by default); the sheet rests against its bottom edge and its largest detent reaches its top edge.
+
+```tsx
+<View style={{ flex: 1 }}>
+  <ScreenContent />
+
+  <NitroModal
+    isOpen
+    presentation="inline"
+    style={{ top: headerHeight }}
+    detents={[320, 'large']}
+    onPullToRefresh={refresh}
+  >
+    <FlatList data={rows} renderItem={renderRow} nestedScrollEnabled />
+  </NitroModal>
+</View>
+```
+
+A number in `detents` is the content height in dp/pt above the bottom safe area.
+
+### Scrolling content and pull to refresh
+
+A sheet hands drags off to the scroll view under the finger:
+
+- Dragging up expands the sheet first, then scrolls the content.
+- Dragging down scrolls the content back to its top. Once the content has scrolled during a drag, that drag never moves the sheet; the next drag collapses it.
+- With `onPullToRefresh` set, a drag that starts with the sheet resting on its lowest detent can pull it further down. Letting go past the threshold calls `onPullToRefresh` (with haptic feedback when it is crossed). This needs a sheet that can't be swiped away: inline, or `dismissOnSwipe={false}`.
+
+On Android, scrollable content takes part through nested scrolling, so set `nestedScrollEnabled` on it.
+
 ### Popup
 
 ```tsx
@@ -168,7 +202,9 @@ const sheet = useRef<NitroModalRef>(null);
 | ------------------------ | ---------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
 | `isOpen`                 | `boolean`                                            | —                  | Controls visibility. Leave undefined to use the [ref API](#nitromodalref) instead.                |
 | `mode`                   | `'bottomSheet' \| 'popup'`                           | `'bottomSheet'`    | How the modal is presented.                                                                       |
-| `detents`                | `SheetDetent[]`                                      | `['fitContent']`   | Sheet heights, smallest first. Android uses at most three.                                        |
+| `presentation`           | `'modal' \| 'inline'`                                | `'modal'`          | `inline` keeps a bottom sheet inside the component's frame, as part of the screen. See [Inline](#inline-persistent-bottom-sheet). |
+| `style`                  | `StyleProp<ViewStyle>`                               | `absoluteFill`     | Inline only: the frame the sheet lives in.                                                        |
+| `detents`                | `SheetDetent[]`                                      | `['fitContent']`   | Sheet heights, smallest first: named sizes or a content height in dp/pt. Android uses at most three. |
 | `initialDetentIndex`     | `number`                                             | `0`                | Index into `detents` the sheet opens at.                                                          |
 | `backdropColor`          | `ColorValue`                                         | `'black'`          | Backdrop color.                                                                                   |
 | `backdropOpacity`        | `number`                                             | `0.4`              | Backdrop opacity, `0`–`1`.                                                                        |
@@ -194,6 +230,7 @@ const sheet = useRef<NitroModalRef>(null);
 | `onDetentChange`    | `(index: number) => void`                | A bottom sheet settled on a different detent.                                      |
 | `onBackdropPress`   | `() => void`                             | The backdrop was tapped (fires even when `dismissOnBackdropPress` is `false`).     |
 | `onBackButtonPress` | `() => void`                             | The Android hardware/gesture back (Escape on web) was pressed.                     |
+| `onPullToRefresh`   | `() => void`                             | The sheet was pulled down past its lowest detent and released. See [pull to refresh](#scrolling-content-and-pull-to-refresh). |
 
 ### `NitroModalRef`
 
@@ -208,11 +245,16 @@ const sheet = useRef<NitroModalRef>(null);
 ```ts
 type ModalMode = 'bottomSheet' | 'popup';
 
-type SheetDetent =
+type ModalPresentation = 'modal' | 'inline';
+
+type NamedSheetDetent =
   | 'small'      // ~25% of the available height
   | 'medium'     // ~50% of the available height
   | 'large'      // the full available height
   | 'fitContent'; // the measured height of your content
+
+// A named height, or the content height in dp/pt above the bottom safe area.
+type SheetDetent = NamedSheetDetent | number;
 
 type KeyboardBehavior = 'pan' | 'resize' | 'none';
 
@@ -228,6 +270,8 @@ import type {
   DismissReason,
   KeyboardBehavior,
   ModalMode,
+  ModalPresentation,
+  NamedSheetDetent,
   NitroModalProps,
   NitroModalRef,
   PopupAnimation,
@@ -237,7 +281,7 @@ import type {
 
 ## How it works
 
-`<NitroModal>` mounts a zero-size placeholder in your React tree. When opened, the native side presents a real view controller (iOS) or window (Android) and hosts your React children inside it. Children mount when the modal opens and stay mounted until the native exit animation completes, so content never disappears mid-transition. The native side also reports the exact area available to the content (accounting for rotation, keyboard and sheet size), and the content container is sized accordingly.
+`<NitroModal>` mounts a zero-size placeholder in your React tree. When opened, the native side presents a real view controller (iOS) or window (Android) and hosts your React children inside it. An inline sheet instead lives in a view laid out with `style`, in your screen's own hierarchy: touches that miss the sheet go to the views behind it, and `keyboardBehavior` doesn't apply (the screen's own keyboard handling does). Children mount when the modal opens and stay mounted until the native exit animation completes, so content never disappears mid-transition. The native side also reports the exact area available to the content (accounting for rotation, keyboard and sheet size), and the content container is sized accordingly.
 
 ## Platform notes
 

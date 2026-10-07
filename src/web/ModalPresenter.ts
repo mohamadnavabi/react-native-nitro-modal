@@ -3,6 +3,7 @@
 import {
   canScrollWithin,
   clipOverflow,
+  inlineInsets,
   readKeyboardHeight,
   readSafeAreaInsets,
   toCSSColor,
@@ -34,6 +35,8 @@ export interface PresenterListener {
   onSwipeDismiss(): void;
   onDetentChange(index: number): void;
   onContentAreaChange(width: number, height: number): void;
+  /** The user pulled the sheet past its lowest detent and let go. */
+  onPullToRefresh(): void;
 }
 
 /**
@@ -45,6 +48,9 @@ export interface PresenterListener {
  * Transitions are interruptible: dismissing mid-enter turns the enter around,
  * and `cancelDismiss` turns an exit back around. Once an exit starts the modal
  * stops taking input.
+ *
+ * Inline, the elements fill the host view in place of a full-window layer:
+ * only the surface takes input, and the keyboard is left to the page.
  */
 export abstract class ModalPresenter {
   protected elements: ModalElements | null = null;
@@ -59,6 +65,8 @@ export abstract class ModalPresenter {
   private finished = false;
   private observedContent: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  /** Inline: follows the host's size, which can change without a window resize. */
+  private hostObserver: ResizeObserver | null = null;
 
   constructor(
     protected config: ModalConfig,
@@ -74,18 +82,26 @@ export abstract class ModalPresenter {
     if (this.elements || this.finished) return;
     this.elements = elements;
     // The elements can outlive a previous presentation (an immediate re-present).
-    elements.overlay.style.pointerEvents = '';
+    this.setInteractive(true);
     elements.surface.style.overflow = clipOverflow();
     elements.surface.style.opacity = '';
     elements.surface.style.transform = '';
+    elements.backdrop.style.display = this.config.isInline ? 'none' : '';
 
     window.addEventListener('resize', this.handleResize);
-    window.visualViewport?.addEventListener('resize', this.handleKeyboard);
-    window.visualViewport?.addEventListener('scroll', this.handleKeyboard);
-    elements.backdrop.addEventListener('click', this.handleBackdropClick);
-    elements.overlay.addEventListener('wheel', this.handleWheel, {
-      passive: false,
-    });
+    if (this.config.isInline) {
+      if (typeof ResizeObserver !== 'undefined') {
+        this.hostObserver = new ResizeObserver(this.handleResize);
+        this.hostObserver.observe(elements.overlay);
+      }
+    } else {
+      window.visualViewport?.addEventListener('resize', this.handleKeyboard);
+      window.visualViewport?.addEventListener('scroll', this.handleKeyboard);
+      elements.backdrop.addEventListener('click', this.handleBackdropClick);
+      elements.overlay.addEventListener('wheel', this.handleWheel, {
+        passive: false,
+      });
+    }
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(this.handleContentResize);
     }
@@ -122,7 +138,7 @@ export abstract class ModalPresenter {
     if (!elements || this.isDismissing || this.finished) return;
     this.isDismissing = true;
     this.entering = false;
-    elements.overlay.style.pointerEvents = 'none';
+    this.setInteractive(false);
     // Also hides the on-screen keyboard.
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && elements.overlay.contains(focused)) {
@@ -138,7 +154,7 @@ export abstract class ModalPresenter {
   cancelDismiss(): boolean {
     if (!this.elements || !this.isDismissing || this.finished) return false;
     this.isDismissing = false;
-    this.elements.overlay.style.pointerEvents = '';
+    this.setInteractive(true);
     this.entering = true;
     this.animateIn();
     return true;
@@ -196,6 +212,8 @@ export abstract class ModalPresenter {
     this.elements?.overlay.removeEventListener('wheel', this.handleWheel);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    this.hostObserver?.disconnect();
+    this.hostObserver = null;
     this.observedContent = null;
   }
 
@@ -226,14 +244,30 @@ export abstract class ModalPresenter {
         : 'Canvas';
   }
 
+  /** Inline, only the surface takes input; the rest reaches the page. */
+  private setInteractive(interactive: boolean) {
+    const { overlay, surface } = this.elements!;
+    if (this.config.isInline) {
+      overlay.style.pointerEvents = 'none';
+      surface.style.pointerEvents = interactive ? 'auto' : 'none';
+    } else {
+      overlay.style.pointerEvents = interactive ? '' : 'none';
+    }
+  }
+
   private measureViewport() {
     const { overlay } = this.elements!;
     this.viewport = {
       width: overlay.clientWidth,
       height: overlay.clientHeight,
     };
-    this.insets = readSafeAreaInsets();
-    this.keyboardHeight = readKeyboardHeight(this.viewport.height);
+    if (this.config.isInline) {
+      this.insets = inlineInsets(overlay);
+      this.keyboardHeight = 0;
+    } else {
+      this.insets = readSafeAreaInsets();
+      this.keyboardHeight = readKeyboardHeight(this.viewport.height);
+    }
   }
 
   /** Re-targets the observer at the content's root element. Returns whether its size changed. */
@@ -275,6 +309,7 @@ export abstract class ModalPresenter {
   };
 
   private handleKeyboard = () => {
+    if (this.config.isInline) return;
     const height = readKeyboardHeight(this.viewport.height);
     if (height === this.keyboardHeight) return;
     this.keyboardHeight = height;

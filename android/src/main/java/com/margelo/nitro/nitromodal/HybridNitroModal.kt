@@ -37,7 +37,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
     }
 
   override var mode: ModalMode = ModalMode.BOTTOMSHEET
-  override var detents: Array<SheetDetent> = arrayOf(SheetDetent.FITCONTENT)
+  override var isInline: Boolean = false
+  override var detents: Array<SheetDetent> = arrayOf(SheetDetent.create(NamedSheetDetent.FITCONTENT))
   override var initialDetentIndex: Double = 0.0
   override var backdropColor: Double = 0xFF000000.toDouble()
   override var backdropOpacity: Double = 0.4
@@ -50,6 +51,7 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
   override var contentBackgroundColor: Double? = null
   override var keyboardBehavior: KeyboardBehavior = KeyboardBehavior.PAN
   override var popupAnimation: PopupAnimation = PopupAnimation.SCALE
+  override var pullToRefreshEnabled: Boolean = false
 
   override var onPresent: (() -> Unit)? = null
   override var onDismiss: ((reason: DismissReason) -> Unit)? = null
@@ -57,6 +59,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
   override var onBackdropPress: (() -> Unit)? = null
   override var onBackButtonPress: (() -> Unit)? = null
   override var onContentAreaChange: ((area: ModalContentArea) -> Unit)? = null
+  override var onPullToRefresh: (() -> Unit)? = null
+  override var onRestingTopChange: ((top: Double) -> Unit)? = null
 
   // endregion
 
@@ -93,6 +97,14 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
         scheduleReconcile()
       }
     }
+    view.onLayoutChange = {
+      presenter?.onHostLayoutChanged() ?: run {
+        if (config.isInline) {
+          reportEstimatedContentArea()
+          if (wantsOpen) scheduleReconcile()
+        }
+      }
+    }
     view.contentRoot.onContentSizeChange = { presenter?.onContentSizeChanged() }
   }
 
@@ -102,6 +114,7 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
     val next = makeConfig()
     if (next == config) return
     config = next
+    view.isInline = next.isInline
     presenter?.update(next) ?: reportEstimatedContentArea()
   }
 
@@ -176,10 +189,14 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
     if (!view.isAttachedToWindow) return
     val activity = reactContext.currentActivity ?: return
     if (activity.isFinishing || activity.isDestroyed) return
+    // An inline sheet needs its laid-out area; the host's layout retries.
+    if (config.isInline && (view.width == 0 || view.height == 0)) return
 
-    val next = when (config.mode) {
-      ModalMode.POPUP -> PopupPresenter(activity, reactContext, view.contentRoot, config, this)
-      ModalMode.BOTTOMSHEET -> BottomSheetPresenter(activity, reactContext, view.contentRoot, config, this)
+    val next = when {
+      config.isInline ->
+        BottomSheetPresenter(activity, reactContext, view.contentRoot, config, this, inlineHost = view)
+      config.mode == ModalMode.POPUP -> PopupPresenter(activity, reactContext, view.contentRoot, config, this)
+      else -> BottomSheetPresenter(activity, reactContext, view.contentRoot, config, this)
     }
     presenter = next
     phase = Phase.PRESENTING
@@ -263,6 +280,14 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
     onDetentChange?.invoke(index.toDouble())
   }
 
+  override fun onPullToRefresh() {
+    if (!isDropped) onPullToRefresh?.invoke()
+  }
+
+  override fun onRestingTopChange(top: Int) {
+    if (!isDropped) onRestingTopChange?.invoke(kotlin.math.round(reactContext.pxToDp(top)))
+  }
+
   override fun onContentAreaChange(width: Int, height: Int) {
     val area = ModalContentArea(
       kotlin.math.floor(reactContext.pxToDp(width)),
@@ -292,26 +317,41 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
 
   // endregion
 
-  private fun makeConfig() = ModalConfig(
-    mode = mode,
-    detents = detents.toList(),
-    initialDetentIndex = if (initialDetentIndex.isNaN()) 0 else initialDetentIndex.toInt(),
-    backdropColor = backdropColor.toProcessedColor(),
-    backdropOpacity = backdropOpacity.toFloat(),
-    backdropBlurRadius = backdropBlurRadius.toFloat(),
-    dismissOnBackdropPress = dismissOnBackdropPress,
-    dismissOnSwipe = dismissOnSwipe,
-    dismissOnBackButton = dismissOnBackButton,
-    grabberVisible = grabberVisible,
-    cornerRadius = cornerRadius.takeIf { it >= 0 }?.toFloat(),
-    contentBackgroundColor = contentBackgroundColor?.toProcessedColor(),
-    keyboardBehavior = keyboardBehavior,
-    popupAnimation = popupAnimation,
-  )
+  private fun makeConfig(): ModalConfig {
+    // An inline sheet is part of the screen; the user can't dismiss it.
+    val inline = isInline && mode == ModalMode.BOTTOMSHEET
+    return ModalConfig(
+      mode = mode,
+      inlinePresentation = isInline,
+      detents = detents.map(Detent::from),
+      initialDetentIndex = if (initialDetentIndex.isNaN()) 0 else initialDetentIndex.toInt(),
+      backdropColor = backdropColor.toProcessedColor(),
+      backdropOpacity = backdropOpacity.toFloat(),
+      backdropBlurRadius = backdropBlurRadius.toFloat(),
+      dismissOnBackdropPress = dismissOnBackdropPress && !inline,
+      dismissOnSwipe = dismissOnSwipe && !inline,
+      dismissOnBackButton = dismissOnBackButton && !inline,
+      grabberVisible = grabberVisible,
+      cornerRadius = cornerRadius.takeIf { it >= 0 }?.toFloat(),
+      contentBackgroundColor = contentBackgroundColor?.toProcessedColor(),
+      keyboardBehavior = keyboardBehavior,
+      popupAnimation = popupAnimation,
+      pullToRefreshEnabled = pullToRefreshEnabled,
+    )
+  }
 
   /** Lets React size the content before the first presentation. */
   private fun reportEstimatedContentArea() {
     val activity = reactContext.currentActivity ?: return
+    if (config.isInline) {
+      if (view.width == 0 || view.height == 0) return
+      // Insets are refined once the sheet is shown.
+      val (width, height) = BottomSheetPresenter.estimateContentArea(
+        activity, config.detents, view.width, view.height, Insets.NONE, isInline = true,
+      )
+      onContentAreaChange(width, height)
+      return
+    }
     val decor = activity.window?.decorView ?: return
     if (decor.width == 0 || decor.height == 0) return
     val insets = ViewCompat.getRootWindowInsets(decor)
@@ -319,7 +359,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
       ?: Insets.NONE
     val (width, height) = when (config.mode) {
       ModalMode.POPUP -> PopupPresenter.estimateContentArea(activity, decor.width, decor.height, insets)
-      ModalMode.BOTTOMSHEET -> BottomSheetPresenter.estimateContentArea(activity, config.detents, decor.width, decor.height, insets)
+      ModalMode.BOTTOMSHEET ->
+        BottomSheetPresenter.estimateContentArea(activity, config.detents, decor.width, decor.height, insets, isInline = false)
     }
     onContentAreaChange(width, height)
   }

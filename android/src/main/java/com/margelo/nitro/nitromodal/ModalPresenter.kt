@@ -22,6 +22,10 @@ import com.facebook.react.uimanager.ThemedReactContext
  * drive the enter/exit animations; this class handles the window, edge-to-edge
  * insets, keyboard tracking, back handling and teardown.
  *
+ * With an [inlineHost], there is no window: the layout fills that view, in
+ * the screen's own hierarchy, and the keyboard and back button are left to
+ * the screen.
+ *
  * Transitions are interruptible like native ones: dismissing mid-enter turns
  * the enter around, and [cancelDismiss] turns an exit back around. Once an
  * exit starts the window stops taking input, as a dismissed dialog would.
@@ -34,6 +38,7 @@ internal abstract class ModalPresenter(
   protected val contentRoot: ModalContentRoot,
   config: ModalConfig,
   protected val listener: Listener,
+  private val inlineHost: NitroModalHostView? = null,
 ) {
   interface Listener {
     /** An enter transition settled: the first one, or one that reversed an exit. */
@@ -45,12 +50,20 @@ internal abstract class ModalPresenter(
     fun onDetentChange(index: Int)
     /** Area available to the content, in px. */
     fun onContentAreaChange(width: Int, height: Int)
+    /** The user pulled the sheet past its lowest detent and let go. */
+    fun onPullToRefresh()
+    /** Inline sheets: the sheet's top at rest, in the host view, in px. */
+    fun onRestingTopChange(top: Int)
   }
 
   protected var config: ModalConfig = config
     private set
 
-  protected val dialog = ComponentDialog(activity, R.style.NitroModal_Dialog)
+  /** Lives in [inlineHost] rather than in a window of its own. */
+  protected val isInline: Boolean
+    get() = inlineHost != null
+
+  protected val dialog by lazy { ComponentDialog(activity, R.style.NitroModal_Dialog) }
   protected val backdrop: View = BackdropView(activity)
 
   /** System bars + display cutout. */
@@ -119,6 +132,9 @@ internal abstract class ModalPresenter(
 
   open fun snapToDetent(index: Int) = Unit
 
+  /** Runs once, right before the layout is torn down. */
+  protected open fun onTeardown() = Unit
+
   protected open fun onBackGestureStarted(event: BackEventCompat) = Unit
   protected open fun onBackGestureProgressed(event: BackEventCompat) = Unit
   protected open fun onBackGestureCancelled() = Unit
@@ -130,6 +146,13 @@ internal abstract class ModalPresenter(
   fun show() {
     (contentRoot.parent as? ViewGroup)?.removeView(contentRoot)
     val root = createLayout()
+    inlineHost?.let { host ->
+      host.addInlineRoot(root)
+      updateInlineInsets()
+      entering = true
+      animateIn()
+      return
+    }
     backdrop.setBackgroundColor(config.effectiveBackdropColor)
     backdrop.alpha = 0f
     backdrop.setOnClickListener { if (!isDismissing) listener.onBackdropPress() }
@@ -179,8 +202,13 @@ internal abstract class ModalPresenter(
     if (previous == newConfig) return
     config = newConfig
     backdrop.setBackgroundColor(config.effectiveBackdropColor)
-    if (previous.backdropBlurRadius != newConfig.backdropBlurRadius) applyBlur()
+    if (!isInline && previous.backdropBlurRadius != newConfig.backdropBlurRadius) applyBlur()
     onConfigChanged(previous)
+  }
+
+  /** The inline host moved or resized. */
+  fun onHostLayoutChanged() {
+    if (isInline && !finished) updateInlineInsets()
   }
 
   /**
@@ -207,7 +235,7 @@ internal abstract class ModalPresenter(
     if (!isDismissing || finished || !canReverseDismiss) return false
     isDismissing = false
     dismissReason = DismissReason.PROGRAMMATIC
-    dialog.window?.clearFlags(INPUT_RELEASE_FLAGS)
+    if (!isInline) dialog.window?.clearFlags(INPUT_RELEASE_FLAGS)
     entering = true
     animateIn()
     return true
@@ -257,6 +285,7 @@ internal abstract class ModalPresenter(
    * then would cut the keyboard's hide animation short.
    */
   private fun releaseInput() {
+    if (isInline) return
     val window = dialog.window ?: return
     val keyboardVisible = imeAnimating || imeHeight > 0
     window.addFlags(
@@ -273,6 +302,12 @@ internal abstract class ModalPresenter(
 
   private fun teardown() {
     backdrop.animate().cancel()
+    onTeardown()
+    if (inlineHost != null) {
+      (contentRoot.parent as? ViewGroup)?.removeView(contentRoot)
+      inlineHost.removeAllViews()
+      return
+    }
     dialog.window?.let { reactContext.onExtraWindowDestroy(it) }
     if (dialog.isShowing && !activity.isFinishing && !activity.isDestroyed) {
       try {
@@ -285,9 +320,33 @@ internal abstract class ModalPresenter(
   }
 
   private fun hideKeyboard() {
-    val token = dialog.window?.decorView?.windowToken ?: return
+    if (isInline && !contentRoot.hasFocus()) return
+    val token = (if (isInline) contentRoot.windowToken else dialog.window?.decorView?.windowToken) ?: return
     (activity.getSystemService(Activity.INPUT_METHOD_SERVICE) as? InputMethodManager)
       ?.hideSoftInputFromWindow(token, 0)
+  }
+
+  /**
+   * Inline: the system bars and cutout overlapping the host view, so the
+   * sheet keeps its content clear of them like a modal sheet does.
+   */
+  private fun updateInlineInsets() {
+    val host = inlineHost ?: return
+    val window = ViewCompat.getRootWindowInsets(host)
+      ?.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+      ?: Insets.NONE
+    val location = IntArray(2)
+    host.getLocationInWindow(location)
+    val root = host.rootView
+    val next = Insets.of(
+      (window.left - location[0]).coerceIn(0, host.width),
+      (window.top - location[1]).coerceIn(0, host.height),
+      (location[0] + host.width - (root.width - window.right)).coerceIn(0, host.width),
+      (location[1] + host.height - (root.height - window.bottom)).coerceIn(0, host.height),
+    )
+    if (next == systemInsets) return
+    systemInsets = next
+    onInsetsChanged()
   }
 
   private fun applyBlur() {

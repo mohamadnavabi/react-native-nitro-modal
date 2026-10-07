@@ -13,13 +13,20 @@ import type {
 export type ModalMode = 'bottomSheet' | 'popup';
 
 /**
- * Resting heights of a `bottomSheet`.
+ * Named resting heights of a `bottomSheet`.
  * - `small`: ~25% of the available height.
  * - `medium`: ~50% of the available height.
  * - `large`: the full available height.
  * - `fitContent`: the measured height of the React content.
  */
-export type SheetDetent = 'small' | 'medium' | 'large' | 'fitContent';
+export type NamedSheetDetent = 'small' | 'medium' | 'large' | 'fitContent';
+
+/**
+ * A resting height of a `bottomSheet`: a named height, or the height
+ * (dp/pt) of the content above the bottom safe area, clamped to the
+ * available height.
+ */
+export type SheetDetent = NamedSheetDetent | number;
 
 /**
  * How the modal reacts to the software keyboard.
@@ -48,6 +55,12 @@ export interface NitroModalProps extends HybridViewProps {
   /** Whether the modal should be presented. */
   isOpen: boolean;
   mode: ModalMode;
+  /**
+   * A `bottomSheet` that lives inside the host view's own bounds instead of
+   * being presented over the app: no backdrop, touches outside the sheet
+   * reach the views behind it, and the user can't dismiss it.
+   */
+  isInline: boolean;
   /** Detents of a `bottomSheet`, smallest first. At most 3 are used on Android. */
   detents: SheetDetent[];
   /** Index into `detents` that the sheet opens at. */
@@ -68,6 +81,11 @@ export interface NitroModalProps extends HybridViewProps {
   contentBackgroundColor?: number;
   keyboardBehavior: KeyboardBehavior;
   popupAnimation: PopupAnimation;
+  /**
+   * Pulling a `bottomSheet` down past its lowest detent calls
+   * `onPullToRefresh`. Needs `dismissOnSwipe` off (always the case inline).
+   */
+  pullToRefreshEnabled: boolean;
 
   /** The present transition finished. */
   onPresent?: () => void;
@@ -80,6 +98,16 @@ export interface NitroModalProps extends HybridViewProps {
   onBackButtonPress?: () => void;
   /** The area available to the content changed (rotation, keyboard, sheet sizing). */
   onContentAreaChange?: (area: ModalContentArea) => void;
+  /**
+   * The user pulled the sheet down past its lowest detent and let go. The
+   * gesture must start with the sheet resting on that detent.
+   */
+  onPullToRefresh?: () => void;
+  /**
+   * Inline sheets: where the sheet's top rests within the host view (or
+   * will, once it settles). Lets React lay the content out where it is shown.
+   */
+  onRestingTopChange?: (top: number) => void;
 }
 
 export interface NitroModalMethods extends HybridViewMethods {
