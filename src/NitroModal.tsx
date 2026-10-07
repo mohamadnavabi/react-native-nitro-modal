@@ -16,7 +16,6 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { callback } from 'react-native-nitro-modules';
 import type {
   DismissReason,
   KeyboardBehavior,
@@ -26,7 +25,7 @@ import type {
   PopupAnimation,
   SheetDetent,
 } from './NitroModal.nitro';
-import { NitroModalView } from './NitroModalView';
+import { callback, NitroModalView } from './NitroModalView';
 
 export interface NitroModalRef {
   /** Opens the modal. Only for uncontrolled usage (no `isOpen` prop). */
@@ -54,13 +53,13 @@ export interface NitroModalProps {
   backdropColor?: ColorValue;
   /** @default 0.4 */
   backdropOpacity?: number;
-  /** Blur radius (dp/pt) behind the modal. Android 12+; approximated on iOS. @default 0 */
+  /** Blur radius (dp/pt/px) behind the modal. Android 12+; approximated on iOS. @default 0 */
   backdropBlur?: number;
   /** @default true */
   dismissOnBackdropPress?: boolean;
   /** Swipe down to dismiss a `bottomSheet`. @default true */
   dismissOnSwipe?: boolean;
-  /** Android back button/gesture dismisses the modal. @default true */
+  /** Android back button/gesture (Escape on web) dismisses the modal. @default true */
   dismissOnBackButton?: boolean;
   /** @default false */
   showGrabber?: boolean;

@@ -7,13 +7,13 @@
 [![npm version](https://img.shields.io/npm/v/react-native-nitro-modal.svg?style=flat-square)](https://www.npmjs.com/package/react-native-nitro-modal)
 [![npm downloads](https://img.shields.io/npm/dm/react-native-nitro-modal.svg?style=flat-square)](https://www.npmjs.com/package/react-native-nitro-modal)
 [![license](https://img.shields.io/npm/l/react-native-nitro-modal.svg?style=flat-square)](LICENSE)
-![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android-lightgrey.svg?style=flat-square)
+![platforms](https://img.shields.io/badge/platforms-iOS%20%7C%20Android%20%7C%20Web-lightgrey.svg?style=flat-square)
 
 </div>
 
 ---
 
-`react-native-nitro-modal` renders your React content inside native modal presentations — an edge-attached UIKit sheet on iOS and Material `BottomSheetBehavior` on Android — so gestures, detent snapping, keyboard handling and transitions are handled natively, not re-implemented in JavaScript.
+`react-native-nitro-modal` renders your React content inside native modal presentations — an edge-attached UIKit sheet on iOS and Material `BottomSheetBehavior` on Android — so gestures, detent snapping, keyboard handling and transitions are handled natively, not re-implemented in JavaScript. On the web (React Native Web), the same API renders a DOM sheet and popup with matching behavior.
 
 ## Features
 
@@ -35,9 +35,10 @@
 | `react-native-nitro-modules`   | `^0.37.1`                                    |
 | iOS                            | 15.0+ (16.0+ for `small` and `fitContent`)   |
 | Android                        | API 24 (Android 7.0)+                        |
+| Web                            | via `react-native-web` (tested with 0.21)    |
 
 > [!NOTE]
-> Web and other platforms are not supported. On those platforms the component renders nothing and logs a one-time warning.
+> Other platforms (e.g. macOS, Windows) are not supported. There the component renders nothing and logs a one-time warning.
 
 ## Installation
 
@@ -171,10 +172,10 @@ const sheet = useRef<NitroModalRef>(null);
 | `initialDetentIndex`     | `number`                                             | `0`                | Index into `detents` the sheet opens at.                                                          |
 | `backdropColor`          | `ColorValue`                                         | `'black'`          | Backdrop color.                                                                                   |
 | `backdropOpacity`        | `number`                                             | `0.4`              | Backdrop opacity, `0`–`1`.                                                                        |
-| `backdropBlur`           | `number`                                             | `0`                | Blur radius (dp/pt) behind the modal. `0` disables it. See [platform notes](#platform-notes).     |
+| `backdropBlur`           | `number`                                             | `0`                | Blur radius (dp/pt/px) behind the modal. `0` disables it. See [platform notes](#platform-notes).  |
 | `dismissOnBackdropPress` | `boolean`                                            | `true`             | Tapping the backdrop closes the modal.                                                            |
 | `dismissOnSwipe`         | `boolean`                                            | `true`             | Swiping down closes a bottom sheet.                                                               |
-| `dismissOnBackButton`    | `boolean`                                            | `true`             | The Android back button/gesture closes the modal.                                                 |
+| `dismissOnBackButton`    | `boolean`                                            | `true`             | The Android back button/gesture (Escape on web) closes the modal.                                 |
 | `showGrabber`            | `boolean`                                            | `false`            | Shows the drag handle on a bottom sheet.                                                          |
 | `cornerRadius`           | `number`                                             | platform default   | Corner radius of the sheet/card.                                                                  |
 | `backgroundColor`        | `ColorValue`                                         | system surface     | Background of the sheet/card.                                                                     |
@@ -192,7 +193,7 @@ const sheet = useRef<NitroModalRef>(null);
 | `onDismiss`         | `(reason: DismissReason) => void`        | The modal is fully gone. Fires exactly once per presentation.                      |
 | `onDetentChange`    | `(index: number) => void`                | A bottom sheet settled on a different detent.                                      |
 | `onBackdropPress`   | `() => void`                             | The backdrop was tapped (fires even when `dismissOnBackdropPress` is `false`).     |
-| `onBackButtonPress` | `() => void`                             | The Android hardware/gesture back was pressed.                                     |
+| `onBackButtonPress` | `() => void`                             | The Android hardware/gesture back (Escape on web) was pressed.                     |
 
 ### `NitroModalRef`
 
@@ -253,6 +254,15 @@ import type {
 - Predictive back (Android 14+, when the app opts in or targets SDK 36) previews the exit while the gesture runs: the sheet uses Material's bottom-sheet animation and the popup scales down.
 - Transitions are interruptible: closing during the enter animation turns it around, and reopening during the exit animation brings the same modal back (no extra `onDismiss`/`onPresent`). Once the exit starts, taps and back presses reach the screen below, as with a native dialog.
 
+**Web**
+
+- Renders through React Native Web's `Modal`, so it stacks with your other modals, traps focus while open and returns it on close. Nothing is rendered in place.
+- Bottom sheets can be dragged with touch or mouse, with the same detent snapping, fling-to-dismiss and hand-off to scrollable content as on iOS. A touch that starts on content already scrolled down scrolls it natively instead of moving the sheet.
+- The Escape key acts as the back button: it fires `onBackButtonPress` and, unless `dismissOnBackButton` is `false`, dismisses the topmost modal with reason `'backButton'`. The browser's history back is not intercepted.
+- `backdropBlur` uses CSS `backdrop-filter`. Without `backgroundColor`, the sheet/card uses the CSS `Canvas` system color, which follows your page's `color-scheme`.
+- `keyboardBehavior` follows the on-screen keyboard through the `visualViewport` API (mobile browsers). Safe-area insets are respected when the page uses `viewport-fit=cover`.
+- Sheets are at most 640px wide and centered. Animations are skipped when the user prefers reduced motion.
+
 **Colors**
 
 - `backdropColor` and `backgroundColor` accept any color string or number supported by `processColor`. `PlatformColor` and `DynamicColorIOS` values are not supported yet.
@@ -263,7 +273,7 @@ The repository includes an example app that covers content-sized sheets, multi-d
 
 ```sh
 yarn
-yarn example ios      # or: yarn example android
+yarn example ios      # or: yarn example android / yarn example web
 ```
 
 ## Contributing

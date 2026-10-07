@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   FlatList,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -27,8 +28,10 @@ export default function App() {
   const log = (event: string) => setLastEvent(event);
 
   // Back on this screen asks before leaving. While a modal is open, back goes
-  // to the modal instead and never reaches this handler.
+  // to the modal instead and never reaches this handler. Web has no back
+  // button to intercept (Escape closes the open modal).
   useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
     const subscription = BackHandler.addEventListener(
       'hardwareBackPress',
       () => {

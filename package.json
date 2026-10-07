@@ -1,6 +1,6 @@
 {
   "name": "react-native-nitro-modal",
-  "version": "0.1.5",
+  "version": "0.2.0",
   "description": "react native native modal",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",
@@ -47,7 +47,8 @@
   "keywords": [
     "react-native",
     "ios",
-    "android"
+    "android",
+    "web"
   ],
   "repository": {
     "type": "git",
