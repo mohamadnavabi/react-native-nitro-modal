@@ -1,5 +1,6 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  BackHandler,
   FlatList,
   Pressable,
   StyleSheet,
@@ -19,10 +20,24 @@ export default function App() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [listOpen, setListOpen] = useState(false);
   const [popupOpen, setPopupOpen] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);
   const [lastEvent, setLastEvent] = useState('—');
   const imperativeSheet = useRef<NitroModalRef>(null);
 
   const log = (event: string) => setLastEvent(event);
+
+  // Back on this screen asks before leaving. While a modal is open, back goes
+  // to the modal instead and never reaches this handler.
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      () => {
+        setExitOpen(true);
+        return true;
+      }
+    );
+    return () => subscription.remove();
+  }, []);
 
   return (
     <View style={styles.screen}>
@@ -120,7 +135,33 @@ export default function App() {
         </View>
       </NitroModal>
 
-      {/* 4. Uncontrolled: opened and closed through the ref. */}
+      {/* 4. Exit confirmation opened by the Android back button. */}
+      <NitroModal
+        isOpen={exitOpen}
+        mode="popup"
+        onDismiss={(reason) => {
+          setExitOpen(false);
+          log(`exit dismissed (${reason})`);
+        }}
+      >
+        <View style={styles.popupContent}>
+          <Text style={styles.heading}>Leave the app?</Text>
+          <Text style={styles.body}>Press back again to stay.</Text>
+          <View style={styles.actions}>
+            <Button title="Stay" onPress={() => setExitOpen(false)} />
+            <Button
+              title="Leave"
+              destructive
+              onPress={() => {
+                setExitOpen(false);
+                BackHandler.exitApp();
+              }}
+            />
+          </View>
+        </View>
+      </NitroModal>
+
+      {/* 5. Uncontrolled: opened and closed through the ref. */}
       <NitroModal
         ref={imperativeSheet}
         detents={['small', 'medium']}

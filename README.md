@@ -250,6 +250,8 @@ import type {
 - Bottom sheets use Material Components' `BottomSheetBehavior`, which supports at most three detents.
 - `backdropBlur` requires Android 12 (API 31)+; it is ignored on older versions.
 - `onBackButtonPress` and `dismissOnBackButton` apply to both the hardware back button and the system back gesture.
+- Predictive back (Android 14+, when the app opts in or targets SDK 36) previews the exit while the gesture runs: the sheet uses Material's bottom-sheet animation and the popup scales down.
+- Transitions are interruptible: closing during the enter animation turns it around, and reopening during the exit animation brings the same modal back (no extra `onDismiss`/`onPresent`). Once the exit starts, taps and back presses reach the screen below, as with a native dialog.
 
 **Colors**
 

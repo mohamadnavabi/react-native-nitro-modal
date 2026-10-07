@@ -1,11 +1,13 @@
 package com.margelo.nitro.nitromodal
 
 import android.app.Activity
+import android.content.Context
 import android.os.Build
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.InputMethodManager
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentDialog
 import androidx.activity.OnBackPressedCallback
 import androidx.core.graphics.Insets
@@ -20,6 +22,10 @@ import com.facebook.react.uimanager.ThemedReactContext
  * drive the enter/exit animations; this class handles the window, edge-to-edge
  * insets, keyboard tracking, back handling and teardown.
  *
+ * Transitions are interruptible like native ones: dismissing mid-enter turns
+ * the enter around, and [cancelDismiss] turns an exit back around. Once an
+ * exit starts the window stops taking input, as a dismissed dialog would.
+ *
  * Everything here runs on the UI thread.
  */
 internal abstract class ModalPresenter(
@@ -30,6 +36,7 @@ internal abstract class ModalPresenter(
   protected val listener: Listener,
 ) {
   interface Listener {
+    /** An enter transition settled: the first one, or one that reversed an exit. */
     fun onPresented()
     /** The window is gone. Called exactly once per presenter. */
     fun onDismissed(reason: DismissReason)
@@ -44,7 +51,7 @@ internal abstract class ModalPresenter(
     private set
 
   protected val dialog = ComponentDialog(activity, R.style.NitroModal_Dialog)
-  protected val backdrop = View(activity)
+  protected val backdrop: View = BackdropView(activity)
 
   /** System bars + display cutout. */
   protected var systemInsets: Insets = Insets.NONE
@@ -55,16 +62,51 @@ internal abstract class ModalPresenter(
     private set
 
   private var imeAnimating = false
-  private var presentedNotified = false
+  private var entering = false
+  private var backGestureActive = false
   private var finished = false
   private var dismissReason = DismissReason.PROGRAMMATIC
 
   protected var isDismissing = false
     private set
 
+  private val backCallback = object : OnBackPressedCallback(true) {
+    // Predictive back (Android 14+): preview the exit while the gesture runs.
+    override fun handleOnBackStarted(backEvent: BackEventCompat) {
+      if (!config.dismissOnBackButton || entering || isDismissing || finished) return
+      backGestureActive = true
+      onBackGestureStarted(backEvent)
+    }
+
+    override fun handleOnBackProgressed(backEvent: BackEventCompat) {
+      if (backGestureActive) onBackGestureProgressed(backEvent)
+    }
+
+    override fun handleOnBackCancelled() = cancelBackGesture()
+
+    override fun handleOnBackPressed() {
+      // Already on its way out: the back press is spent.
+      if (isDismissing || finished) return
+      listener.onBackPress()
+      // Still here (back didn't dismiss): settle the preview.
+      cancelBackGesture()
+    }
+  }
+
   protected abstract fun createLayout(): ViewGroup
+
+  /**
+   * Animates from the current state to presented, then calls
+   * [notifyPresented]. Runs on show and again when an exit is reversed.
+   */
   protected abstract fun animateIn()
-  protected abstract fun animateOut(onEnd: () -> Unit)
+
+  /**
+   * Animates from the current state (possibly mid-enter) to gone, then calls
+   * [onEnd]. [fromBackGesture]: a predictive back preview is being committed.
+   */
+  protected abstract fun animateOut(fromBackGesture: Boolean, onEnd: () -> Unit)
+
   protected abstract fun onConfigChanged(previous: ModalConfig)
 
   /** System insets or the settled keyboard height changed. */
@@ -77,18 +119,24 @@ internal abstract class ModalPresenter(
 
   open fun snapToDetent(index: Int) = Unit
 
+  protected open fun onBackGestureStarted(event: BackEventCompat) = Unit
+  protected open fun onBackGestureProgressed(event: BackEventCompat) = Unit
+  protected open fun onBackGestureCancelled() = Unit
+
+  /** Whether the running exit can still be turned around. */
+  protected open val canReverseDismiss: Boolean
+    get() = true
+
   fun show() {
     (contentRoot.parent as? ViewGroup)?.removeView(contentRoot)
     val root = createLayout()
     backdrop.setBackgroundColor(config.effectiveBackdropColor)
     backdrop.alpha = 0f
-    backdrop.setOnClickListener { listener.onBackdropPress() }
+    backdrop.setOnClickListener { if (!isDismissing) listener.onBackdropPress() }
 
     dialog.setContentView(root, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     dialog.setCancelable(false)
-    dialog.onBackPressedDispatcher.addCallback(dialog, object : OnBackPressedCallback(true) {
-      override fun handleOnBackPressed() = listener.onBackPress()
-    })
+    dialog.onBackPressedDispatcher.addCallback(dialog, backCallback)
     observeInsets(root)
 
     val window = requireNotNull(dialog.window)
@@ -122,6 +170,7 @@ internal abstract class ModalPresenter(
     window.clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
     reactContext.onExtraWindowCreate(window)
 
+    entering = true
     animateIn()
   }
 
@@ -134,13 +183,34 @@ internal abstract class ModalPresenter(
     onConfigChanged(previous)
   }
 
-  /** Animated dismissal. [Listener.onDismissed] follows when it completes. */
+  /**
+   * Animated dismissal, also from mid-enter. [Listener.onDismissed] follows
+   * when it completes, unless [cancelDismiss] turns it around first.
+   */
   fun dismiss(reason: DismissReason) {
     if (isDismissing || finished) return
     isDismissing = true
+    entering = false
     dismissReason = reason
+    val fromBackGesture = backGestureActive
+    backGestureActive = false
+    releaseInput()
     hideKeyboard()
-    animateOut { finish() }
+    animateOut(fromBackGesture) { finish() }
+  }
+
+  /**
+   * Reverses a running exit from wherever it is. [Listener.onPresented]
+   * follows once it settles. Returns false when the exit can't be reversed.
+   */
+  fun cancelDismiss(): Boolean {
+    if (!isDismissing || finished || !canReverseDismiss) return false
+    isDismissing = false
+    dismissReason = DismissReason.PROGRAMMATIC
+    dialog.window?.clearFlags(INPUT_RELEASE_FLAGS)
+    entering = true
+    animateIn()
+    return true
   }
 
   /** Tears the window down without animating or notifying the listener. */
@@ -150,10 +220,10 @@ internal abstract class ModalPresenter(
     teardown()
   }
 
-  /** For subclasses: the enter animation finished. */
+  /** For subclasses: the running enter animation settled. */
   protected fun notifyPresented() {
-    if (presentedNotified || isDismissing || finished) return
-    presentedNotified = true
+    if (!entering || isDismissing || finished) return
+    entering = false
     listener.onPresented()
   }
 
@@ -173,6 +243,26 @@ internal abstract class ModalPresenter(
     get() = (imeHeight - systemInsets.bottom).coerceAtLeast(0)
 
   protected fun dp(value: Float): Int = activity.dpToPx(value).toInt()
+
+  private fun cancelBackGesture() {
+    if (!backGestureActive) return
+    backGestureActive = false
+    onBackGestureCancelled()
+  }
+
+  /**
+   * A dismissed native dialog leaves the screen at once, so taps and back
+   * presses during the exit reach whatever is below. Do the same while the
+   * exit animates. Focus is kept while the keyboard is up: giving it away
+   * then would cut the keyboard's hide animation short.
+   */
+  private fun releaseInput() {
+    val window = dialog.window ?: return
+    val keyboardVisible = imeAnimating || imeHeight > 0
+    window.addFlags(
+      if (keyboardVisible) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else INPUT_RELEASE_FLAGS,
+    )
+  }
 
   private fun finish() {
     if (finished) return
@@ -250,4 +340,23 @@ internal abstract class ModalPresenter(
       },
     )
   }
+
+  private companion object {
+    const val INPUT_RELEASE_FLAGS =
+      WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+  }
+}
+
+/**
+ * Full-window scrim. It draws a single rect, so fading it needs no offscreen
+ * layer; the default (overlapping) would allocate a full-screen buffer for
+ * every animated frame.
+ */
+private class BackdropView(context: Context) : View(context) {
+  init {
+    // Native dialogs don't click when tapped outside.
+    isSoundEffectsEnabled = false
+  }
+
+  override fun hasOverlappingRendering(): Boolean = false
 }

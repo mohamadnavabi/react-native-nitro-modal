@@ -1,28 +1,30 @@
 package com.margelo.nitro.nitromodal
 
 import android.app.Activity
-import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
+import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
+import androidx.activity.BackEventCompat
 import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.graphics.Insets
 import androidx.core.view.doOnLayout
 import com.facebook.react.uimanager.ThemedReactContext
 import com.google.android.material.bottomsheet.BottomSheetBehavior
-import com.google.android.material.shape.MaterialShapeDrawable
-import com.google.android.material.shape.ShapeAppearanceModel
+import kotlin.math.ceil
 
 /**
  * `bottomSheet` mode, driven by [BottomSheetBehavior]. Dragging, flinging,
  * snapping and the backdrop fade all run on the UI thread with no JS.
  *
  * `BottomSheetBehavior` supports up to three resting states, so detents map
- * onto collapsed / half-expanded / expanded, smallest first.
+ * onto collapsed / half-expanded / expanded, smallest first. Predictive back
+ * uses the behavior's own Material animation, like `BottomSheetDialog`.
  */
 internal class BottomSheetPresenter(
   activity: Activity,
@@ -38,13 +40,18 @@ internal class BottomSheetPresenter(
   private val sheet = FrameLayout(activity)
   private val grabber = View(activity)
   private val behavior = BottomSheetBehavior<FrameLayout>()
-  private val sheetBackground = MaterialShapeDrawable()
+  private val sheetBackground = GradientDrawable()
+  private var cornerRadiusPx = 0f
 
   /** Resting detents sorted by height; position i maps to [states][i]. */
   private var sortedDetents: List<Detent> = emptyList()
   private var maxContentHeight = 0
   private var presented = false
   private var lastDetentIndex = -1
+
+  /** A predictive back gesture was committed; the behavior is sliding the sheet out. */
+  private var committingBack = false
+  private var backProgress = 0f
 
   private val callback = object : BottomSheetBehavior.BottomSheetCallback() {
     override fun onStateChanged(bottomSheet: View, newState: Int) {
@@ -54,11 +61,10 @@ internal class BottomSheetPresenter(
       }
       val position = states().indexOf(newState)
       if (position < 0 || isDismissing) return
-      if (!presented) {
-        presented = true
-        behavior.isHideable = this@BottomSheetPresenter.config.dismissOnSwipe
-        notifyPresented()
-      }
+      presented = true
+      // Hideable while entering/exiting; at rest, swipe-to-dismiss follows the prop.
+      behavior.isHideable = this@BottomSheetPresenter.config.dismissOnSwipe
+      notifyPresented()
       val index = sortedDetents.getOrNull(position)?.index ?: return
       if (index != lastDetentIndex) {
         lastDetentIndex = index
@@ -80,7 +86,15 @@ internal class BottomSheetPresenter(
     }
 
     sheet.background = sheetBackground
-    sheet.outlineProvider = ViewOutlineProvider.BACKGROUND
+    sheet.outlineProvider = object : ViewOutlineProvider() {
+      override fun getOutline(view: View, outline: Outline) {
+        // Extends past the bottom edge so only the top corners round. A round
+        // rect clips cheaply on every API level; a path outline only clips on
+        // API 33+, and slowly.
+        val overhang = ceil(cornerRadiusPx).toInt()
+        outline.setRoundRect(0, 0, view.width, view.height + overhang, cornerRadiusPx)
+      }
+    }
     sheet.clipToOutline = true
     sheet.addView(contentRoot, FrameLayout.LayoutParams(MATCH, MATCH))
     sheet.addView(
@@ -110,25 +124,54 @@ internal class BottomSheetPresenter(
 
   override fun animateIn() {
     coordinator.doOnLayout {
+      if (isDismissing) return@doOnLayout
       updateDetents()
-      // Settles from HIDDEN with the behavior's own animation.
-      behavior.state = stateFor(config.clampedInitialDetentIndex)
+      // Settles with the behavior's own animation, from HIDDEN on show or from
+      // wherever a reversed exit got to (back to the detent it left).
+      val index = if (lastDetentIndex >= 0) lastDetentIndex else config.clampedInitialDetentIndex
+      behavior.state = stateFor(index)
     }
   }
 
-  override fun animateOut(onEnd: () -> Unit) {
+  override fun animateOut(fromBackGesture: Boolean, onEnd: () -> Unit) {
     if (behavior.state == BottomSheetBehavior.STATE_HIDDEN || !coordinator.isLaidOut) {
       onEnd()
       return
     }
     behavior.isHideable = true
-    behavior.state = BottomSheetBehavior.STATE_HIDDEN
+    if (fromBackGesture) {
+      // Slides out from the gesture's preview. onSlide doesn't run for this
+      // animation, so fade the backdrop alongside it, timed like Material's
+      // slide (shorter the further the gesture got).
+      committingBack = true
+      val duration = BACK_HIDE_MAX_DURATION -
+        ((BACK_HIDE_MAX_DURATION - BACK_HIDE_MIN_DURATION) * backProgress).toLong()
+      backdrop.animate().alpha(0f).setDuration(duration).setInterpolator(FAST_OUT_SLOW_IN).start()
+      behavior.handleBackInvoked()
+    } else {
+      behavior.state = BottomSheetBehavior.STATE_HIDDEN
+    }
     // STATE_HIDDEN reaches finishUserDismissal(), which keeps our reason.
   }
 
+  override val canReverseDismiss: Boolean
+    get() = !committingBack
+
+  override fun onBackGestureStarted(event: BackEventCompat) {
+    backProgress = event.progress
+    behavior.startBackProgress(event)
+  }
+
+  override fun onBackGestureProgressed(event: BackEventCompat) {
+    backProgress = event.progress
+    behavior.updateBackProgress(event)
+  }
+
+  override fun onBackGestureCancelled() = behavior.cancelBackProgress()
+
   override fun onConfigChanged(previous: ModalConfig) {
     applyAppearance()
-    if (presented) behavior.isHideable = config.dismissOnSwipe
+    if (presented && !isDismissing) behavior.isHideable = config.dismissOnSwipe
     if (previous.detents != config.detents || previous.keyboardBehavior != config.keyboardBehavior) {
       updateDetents()
     }
@@ -153,11 +196,12 @@ internal class BottomSheetPresenter(
 
   private fun applyAppearance() {
     val radius = activity.dpToPx(config.cornerRadius ?: DEFAULT_CORNER_RADIUS_DP)
-    sheetBackground.shapeAppearanceModel = ShapeAppearanceModel.builder()
-      .setTopLeftCornerSize(radius)
-      .setTopRightCornerSize(radius)
-      .build()
-    sheetBackground.fillColor = ColorStateList.valueOf(config.surfaceColor(activity))
+    if (radius != cornerRadiusPx) {
+      cornerRadiusPx = radius
+      sheetBackground.cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f)
+      sheet.invalidateOutline()
+    }
+    sheetBackground.setColor(config.surfaceColor(activity))
     grabber.visibility = if (config.grabberVisible) View.VISIBLE else View.GONE
     grabber.background = GradientDrawable().apply {
       cornerRadius = activity.dpToPx(2f)
@@ -252,6 +296,8 @@ internal class BottomSheetPresenter(
 
   /** Lifts the sheet above the keyboard without relayout (`pan` and `resize`). */
   private fun applyKeyboardOffset() {
+    // The back commit animation owns translationY until the window goes.
+    if (committingBack) return
     if (config.keyboardBehavior == KeyboardBehavior.NONE) {
       sheet.translationY = 0f
       return
@@ -264,6 +310,11 @@ internal class BottomSheetPresenter(
     private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
     private const val DEFAULT_CORNER_RADIUS_DP = 28f
     private const val MAX_WIDTH_DP = 640f
+
+    /** `MaterialBottomContainerBackHelper`'s default hide durations. */
+    private const val BACK_HIDE_MAX_DURATION = 300L
+    private const val BACK_HIDE_MIN_DURATION = 150L
+    private val FAST_OUT_SLOW_IN = PathInterpolator(0.4f, 0f, 0.2f, 1f)
 
     /** Content area before the sheet is on screen, in px. */
     fun estimateContentArea(

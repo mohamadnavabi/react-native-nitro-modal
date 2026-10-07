@@ -17,6 +17,9 @@ import com.facebook.react.uimanager.ThemedReactContext
  * Presentation is a small state machine so that rapid `isOpen` toggles,
  * native dismissals and unmounts always settle on a consistent state, and
  * every accepted present request ends with exactly one `onDismiss`.
+ * Transitions are interrupted rather than queued: closing mid-enter turns the
+ * enter around, and opening mid-exit turns the exit around (that session
+ * carries on, so it gets no `onDismiss` and at most one `onPresent`).
  */
 @DoNotStrip
 class HybridNitroModal(private val reactContext: ThemedReactContext) :
@@ -68,6 +71,9 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
 
   /** A present request was accepted and its `onDismiss` is still owed. */
   private var sessionActive = false
+
+  /** `onPresent` was sent for the current session. */
+  private var presentSent = false
   private var dismissReason = DismissReason.PROGRAMMATIC
   private var reconcileScheduled = false
   private var isDropped = false
@@ -151,8 +157,12 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
 
   private fun reconcile() {
     when (phase) {
-      Phase.PRESENTING, Phase.DISMISSING -> Unit // The transition reconciles when done.
-      Phase.PRESENTED -> if (!wantsOpen) startDismiss()
+      Phase.PRESENTING, Phase.PRESENTED -> if (!wantsOpen) startDismiss()
+      // Not reversible (e.g. a committed back gesture): finishDismiss reconciles.
+      Phase.DISMISSING -> if (wantsOpen && presenter?.cancelDismiss() == true) {
+        phase = Phase.PRESENTING
+        dismissReason = DismissReason.PROGRAMMATIC
+      }
       Phase.IDLE -> when {
         wantsOpen -> startPresent()
         sessionActive -> endSession() // Cancelled before anything appeared.
@@ -200,6 +210,7 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
     if (!sessionActive) return
     val reason = dismissReason
     dismissReason = DismissReason.PROGRAMMATIC
+    presentSent = false
     // A present requested while we were dismissing starts a new session.
     sessionActive = wantsOpen
     if (!isDropped) onDismiss?.invoke(reason)
@@ -218,7 +229,10 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
   override fun onPresented() {
     if (phase != Phase.PRESENTING) return
     phase = Phase.PRESENTED
-    if (!isDropped) onPresent?.invoke()
+    if (!presentSent) {
+      presentSent = true
+      if (!isDropped) onPresent?.invoke()
+    }
     reconcile()
   }
 
