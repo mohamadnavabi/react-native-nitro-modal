@@ -466,17 +466,20 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       layoutSheet()
 
     case .changed:
-      guard var state = drag, let minTop = detentTops.min() else { return }
+      guard var state = drag, let minTop = detentTops.min(), let maxTop = settledTops.max() else { return }
       let translation = pan.translation(in: self).y
       let delta = translation - state.lastTranslation
       state.lastTranslation = translation
 
       if let scrollView = state.scrollView {
-        // Up: expand the sheet before scrolling. Down: scroll back to the top
-        // before collapsing the sheet, in a separate gesture.
+        // Up: expand the sheet before scrolling, once content pulled past its
+        // top is back. Down: scroll back to the top before collapsing the
+        // sheet, in a separate gesture. A sheet that stops at its lowest
+        // detent leaves the pull to the content there (bounce, RefreshControl).
         let drive = delta < 0
-          ? state.rawTop > minTop + 0.5
+          ? state.rawTop > minTop + 0.5 && !scrollView.isPulledDown
           : !state.contentScrolled && scrollView.isScrolledToTop
+            && (canDragBelowLowestDetent || state.rawTop < maxTop - 0.5)
         if drive {
           state.rawTop = max(state.rawTop + delta, minTop)
           lockScroll(scrollView, at: delta < 0 ? lockedOffsetY : scrollView.topOffsetY)
@@ -491,6 +494,9 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       } else {
         state.rawTop += delta
         state.sheetDrove = true
+      }
+      if !canDragBelowLowestDetent {
+        state.rawTop = min(state.rawTop, maxTop)
       }
       let top = constrained(state.rawTop)
       if state.sheetDrove, isInline, !state.cancelledReactTouches {
@@ -558,6 +564,13 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       self.unlockScroll()
       self.stopRefreshIndicatorIfHidden()
     }
+  }
+
+  /// Whether a drag can take the sheet below its lowest detent: to dismiss it
+  /// or to pull to refresh. Otherwise it stops there, like Android's
+  /// `BottomSheetBehavior`.
+  private var canDragBelowLowestDetent: Bool {
+    config.dismissOnSwipe || config.pullToRefreshEnabled
   }
 
   /// Rubber-bands above the tallest detent, and below the lowest one when
@@ -655,6 +668,11 @@ private extension UIScrollView {
 
   var isScrolledToTop: Bool {
     contentOffset.y <= topOffsetY + 0.5
+  }
+
+  /// Pulled down past its top, bouncing or revealing a refresh control.
+  var isPulledDown: Bool {
+    contentOffset.y < topOffsetY - 0.5
   }
 
   var canScrollVertically: Bool {

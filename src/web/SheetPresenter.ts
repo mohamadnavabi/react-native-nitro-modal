@@ -527,6 +527,9 @@ export class SheetPresenter extends ModalPresenter {
       drag.rawTop += delta;
       drag.sheetDrove = true;
     }
+    if (!this.canDragBelowLowestDetent) {
+      drag.rawTop = Math.min(drag.rawTop, Math.max(...this.settledTops));
+    }
     const top = this.constrained(drag.rawTop);
     if (drag.canRefresh) {
       drag.refreshArmed =
@@ -606,6 +609,15 @@ export class SheetPresenter extends ModalPresenter {
     const last = samples[samples.length - 1];
     if (!first || !last || last.time <= first.time) return 0;
     return ((last.y - first.y) / (last.time - first.time)) * 1000;
+  }
+
+  /**
+   * Whether a drag can take the sheet below its lowest detent: to dismiss it
+   * or to pull to refresh. Otherwise it stops there, like Android's
+   * `BottomSheetBehavior`.
+   */
+  private get canDragBelowLowestDetent(): boolean {
+    return this.config.dismissOnSwipe || this.config.pullToRefreshEnabled;
   }
 
   /** Rubber-bands above the tallest detent, and below the lowest one when swiping can't dismiss. */

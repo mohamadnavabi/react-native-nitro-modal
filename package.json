@@ -1,6 +1,6 @@
 {
   "name": "react-native-nitro-modal",
-  "version": "0.3.3-rc",
+  "version": "0.3.4-rc",
   "description": "react native native modal",
   "main": "./lib/module/index.js",
   "types": "./lib/typescript/src/index.d.ts",

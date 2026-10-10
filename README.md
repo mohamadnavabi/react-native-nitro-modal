@@ -142,6 +142,7 @@ A sheet hands drags off to the scroll view under the finger:
 
 - Dragging up expands the sheet first, then scrolls the content.
 - Dragging down scrolls the content back to its top. Once the content has scrolled during a drag, that drag never moves the sheet; the next drag collapses it.
+- A sheet that can't be swiped away (inline, or `dismissOnSwipe={false}`) and has no `onPullToRefresh` stops at its lowest detent. Dragging down further pulls the scrollable content instead, so a `RefreshControl` on it works, with its indicator inside the sheet (iOS and Android).
 - With `onPullToRefresh` set, a drag that starts with the sheet resting on its lowest detent can pull it further down. Letting go past the threshold calls `onPullToRefresh` (with haptic feedback when it is crossed). This needs a sheet that can't be swiped away: inline, or `dismissOnSwipe={false}`.
 - With `refreshing` set too, the sheet stays on its lowest detent and its content moves down inside it, uncovering an activity indicator at the top of the sheet. The content stays pulled down while `refreshing` is `true`, like `RefreshControl`. Set it to `true` in `onPullToRefresh` and back to `false` when the refresh is done. Setting it to `true` yourself shows the indicator without a pull.
 
