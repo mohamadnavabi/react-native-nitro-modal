@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
@@ -18,7 +19,9 @@ import android.view.ViewOutlineProvider
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
+import android.widget.ProgressBar
 import androidx.activity.BackEventCompat
+import androidx.core.animation.doOnEnd
 import androidx.coordinatorlayout.widget.CoordinatorLayout
 import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
@@ -56,6 +59,7 @@ internal class BottomSheetPresenter(
   private val coordinator = SheetLayout(activity)
   private val sheet = FrameLayout(activity)
   private val grabber = View(activity)
+  private val refreshIndicator = ProgressBar(activity)
   private val behavior = SheetBehavior()
   private val sheetBackground = GradientDrawable()
   private var cornerRadiusPx = 0f
@@ -72,6 +76,11 @@ internal class BottomSheetPresenter(
 
   /** How far the sheet is pulled below its lowest detent, in px. */
   private var pullOffset = 0f
+  private var pullAnimator: ValueAnimator? = null
+  private val refreshThreshold = activity.dpToPx(REFRESH_THRESHOLD_DP)
+
+  /** The sheet rests below its lowest detent, the indicator spinning above it. */
+  private var refreshing = config.refreshing ?: false
 
   /** A predictive back gesture was committed; the behavior is sliding the sheet out. */
   private var committingBack = false
@@ -86,6 +95,8 @@ internal class BottomSheetPresenter(
       if (newState == BottomSheetBehavior.STATE_DRAGGING) {
         sheetDragging = true
         coordinator.notifyNativeGesture(started = true)
+        // A refreshing sheet follows the finger from its lowest detent.
+        animatePullOffset(0f)
       } else if (sheetDragging) {
         sheetDragging = false
         coordinator.notifyNativeGesture(started = false)
@@ -97,6 +108,7 @@ internal class BottomSheetPresenter(
       behavior.isHideable = this@BottomSheetPresenter.config.dismissOnSwipe
       notifyPresented()
       reportRestingTop()
+      animatePullOffset(restingPullOffset())
       val index = sortedDetents.getOrNull(position)?.index ?: return
       if (index != lastDetentIndex) {
         lastDetentIndex = index
@@ -107,6 +119,7 @@ internal class BottomSheetPresenter(
     override fun onSlide(bottomSheet: View, slideOffset: Float) {
       // slideOffset is -1 when hidden and 0 at the lowest detent.
       backdrop.alpha = (1f + slideOffset).coerceIn(0f, 1f)
+      layoutRefreshIndicator()
     }
   }
 
@@ -117,7 +130,19 @@ internal class BottomSheetPresenter(
       if (r - l != oldR - oldL || b - t != oldB - oldT) coordinator.post { updateDetents() }
       // Detent heights can move the resting sheet without a state change.
       reportRestingTop()
+      layoutRefreshIndicator()
     }
+
+    // Behind the sheet, which uncovers it as it's pulled down.
+    refreshIndicator.isIndeterminate = true
+    refreshIndicator.visibility = View.INVISIBLE
+    refreshIndicator.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    coordinator.addView(
+      refreshIndicator,
+      CoordinatorLayout.LayoutParams(dp(REFRESH_INDICATOR_SIZE_DP), dp(REFRESH_INDICATOR_SIZE_DP)).apply {
+        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+      },
+    )
 
     sheet.background = sheetBackground
     sheet.outlineProvider = object : ViewOutlineProvider() {
@@ -207,6 +232,8 @@ internal class BottomSheetPresenter(
 
   override fun onConfigChanged(previous: ModalConfig) {
     applyAppearance()
+    if (previous.refreshing != config.refreshing) setRefreshing(config.refreshing ?: false)
+    layoutRefreshIndicator()
     if (presented && !isDismissing) behavior.isHideable = config.dismissOnSwipe
     if (previous.detents != config.detents || previous.keyboardBehavior != config.keyboardBehavior) {
       updateDetents()
@@ -245,6 +272,7 @@ internal class BottomSheetPresenter(
       cornerRadius = activity.dpToPx(2f)
       setColor(Color.argb(0x66, 0x80, 0x80, 0x80))
     }
+    refreshIndicator.indeterminateTintList = config.refreshIndicatorColor?.let(ColorStateList::valueOf)
   }
 
   /** Recomputes detent heights and maps them onto the behavior's states. */
@@ -364,6 +392,43 @@ internal class BottomSheetPresenter(
   private fun setPullOffset(offset: Float) {
     pullOffset = offset
     applyTranslation()
+    layoutRefreshIndicator()
+  }
+
+  private fun animatePullOffset(target: Float) {
+    if (coordinator.isPulling) return
+    if (pullAnimator == null && pullOffset == target) return
+    pullAnimator?.cancel()
+    pullAnimator = ValueAnimator.ofFloat(pullOffset, target).apply {
+      duration = PULL_RELEASE_DURATION
+      interpolator = DecelerateInterpolator()
+      addUpdateListener { setPullOffset(it.animatedValue as Float) }
+      doOnEnd { if (pullAnimator === it) pullAnimator = null }
+      start()
+    }
+  }
+
+  /** Where the sheet rests below its lowest detent: held there while refreshing. */
+  private fun restingPullOffset(): Float =
+    if (refreshing && behavior.state == states().firstOrNull()) refreshThreshold else 0f
+
+  private fun setRefreshing(value: Boolean) {
+    if (value == refreshing) return
+    refreshing = value
+    if (presented && !isDismissing) animatePullOffset(restingPullOffset())
+  }
+
+  /**
+   * Centered in the gap a pull uncovers below the lowest detent, fading in
+   * as the pull nears the threshold.
+   */
+  private fun layoutRefreshIndicator() {
+    val size = refreshIndicator.layoutParams?.height ?: return
+    refreshIndicator.translationY = sheet.top + sheet.translationY - (refreshThreshold + size) / 2
+    val progress = if (config.refreshing == null || isDismissing) 0f else (pullOffset / refreshThreshold).coerceIn(0f, 1f)
+    refreshIndicator.alpha = progress
+    // Hidden, the indeterminate animation stops.
+    refreshIndicator.visibility = if (progress > 0f) View.VISIBLE else View.INVISIBLE
   }
 
   /**
@@ -435,14 +500,15 @@ internal class BottomSheetPresenter(
   @SuppressLint("ViewConstructor")
   private inner class SheetLayout(context: Context) : CoordinatorLayout(context), ReactPointerEventsView {
     private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
-    private val refreshThreshold = context.dpToPx(REFRESH_THRESHOLD_DP)
     private var lastEvent: MotionEvent? = null
     private var downX = 0f
     private var downY = 0f
     private var canPull = false
     private var pulling = false
     private var armed = false
-    private var pullAnimator: ValueAnimator? = null
+
+    val isPulling: Boolean
+      get() = pulling
 
     override val pointerEvents: PointerEvents
       get() = PointerEvents.BOX_NONE
@@ -513,7 +579,7 @@ internal class BottomSheetPresenter(
      */
     private fun canStartPull(x: Float, y: Float): Boolean {
       if (!config.pullToRefreshEnabled || config.dismissOnSwipe || !presented || isDismissing) return false
-      if (pullOffset != 0f || behavior.state != states().firstOrNull()) return false
+      if (refreshing || pullOffset != 0f || behavior.state != states().firstOrNull()) return false
       val top = sheet.top + sheet.translationY
       if (y < top || x < sheet.left || x >= sheet.right) return false
       return !canScrollUpAt(sheet, x - sheet.left, y - top)
@@ -524,12 +590,9 @@ internal class BottomSheetPresenter(
       armed = false
       canPull = false
       notifyNativeGesture(started = false, event = ev)
-      pullAnimator = ValueAnimator.ofFloat(pullOffset, 0f).apply {
-        duration = PULL_RELEASE_DURATION
-        interpolator = DecelerateInterpolator()
-        addUpdateListener { setPullOffset(it.animatedValue as Float) }
-        start()
-      }
+      // Settles on the refreshing position; React confirms or ends it.
+      if (refresh && config.refreshing != null) refreshing = true
+      animatePullOffset(restingPullOffset())
       if (refresh) listener.onPullToRefresh()
     }
 
@@ -572,6 +635,7 @@ internal class BottomSheetPresenter(
 
     /** How far below its lowest detent the sheet must be pulled to refresh. */
     private const val REFRESH_THRESHOLD_DP = 56f
+    private const val REFRESH_INDICATOR_SIZE_DP = 32f
     private const val PULL_RELEASE_DURATION = 300L
     private val THRESHOLD_FEEDBACK =
       if (Build.VERSION.SDK_INT >= 34) {

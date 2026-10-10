@@ -86,6 +86,14 @@ export interface NitroModalProps extends HybridViewProps {
    * `onPullToRefresh`. Needs `dismissOnSwipe` off (always the case inline).
    */
   pullToRefreshEnabled: boolean;
+  /**
+   * A refresh is in progress: the sheet rests pulled down below its lowest
+   * detent with an activity indicator above it. Native starts refreshing on
+   * its own when a pull is released. `undefined` shows no indicator.
+   */
+  refreshing?: boolean;
+  /** Refresh indicator color as a processed ARGB color. Omit for the platform default. */
+  refreshIndicatorColor?: number;
 
   /** The present transition finished. */
   onPresent?: () => void;

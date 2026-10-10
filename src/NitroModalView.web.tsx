@@ -11,7 +11,7 @@ import {
 import { Modal, View, type StyleProp, type ViewStyle } from 'react-native';
 import type { ReactNativeView } from 'react-native-nitro-modules';
 import type { NitroModalMethods, NitroModalProps } from './NitroModal.nitro';
-import { clipOverflow } from './web/dom';
+import { clipOverflow, REFRESH_INDICATOR_SIZE } from './web/dom';
 import { ModalController } from './web/ModalController';
 
 interface WebNitroModalViewProps extends NitroModalProps {
@@ -45,6 +45,8 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
   const surface = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const grabber = useRef<HTMLDivElement>(null);
+  const refreshIndicator = useRef<HTMLDivElement>(null);
+  const refreshSpinner = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     controller.attach();
@@ -67,6 +69,8 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
       surface: surface.current!,
       content: content.current!,
       grabber: grabber.current!,
+      refreshIndicator: refreshIndicator.current!,
+      refreshSpinner: refreshSpinner.current!,
     });
     return () => controller.elementsWillUnmount();
   }, [controller, mounted]);
@@ -98,6 +102,9 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
       }
     >
       <div ref={backdrop} aria-hidden style={styles.backdrop} />
+      <div ref={refreshIndicator} aria-hidden style={styles.refreshIndicator}>
+        <div ref={refreshSpinner} style={styles.refreshSpinner} />
+      </div>
       <div ref={surface} style={styles.surface}>
         <div ref={content} style={styles.content}>
           {children}
@@ -171,6 +178,24 @@ const styles = {
     borderRadius: 2.5,
     backgroundColor: 'rgba(127, 127, 127, 0.4)',
     pointerEvents: 'none',
+  },
+  refreshIndicator: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    width: REFRESH_INDICATOR_SIZE,
+    height: REFRESH_INDICATOR_SIZE,
+    opacity: 0,
+    pointerEvents: 'none',
+  },
+  // Colored through `color` by the presenter.
+  refreshSpinner: {
+    width: '100%',
+    height: '100%',
+    boxSizing: 'border-box',
+    borderRadius: '50%',
+    border: '2.5px solid currentColor',
+    borderTopColor: 'transparent',
   },
 } satisfies Record<string, CSSProperties>;
 

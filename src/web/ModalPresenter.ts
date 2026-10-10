@@ -23,6 +23,10 @@ export interface ModalElements {
   /** Hosts the React content. */
   content: HTMLElement;
   grabber: HTMLElement;
+  /** Behind the sheet, uncovered as it's pulled down to refresh. */
+  refreshIndicator: HTMLElement;
+  /** The spinning ring inside `refreshIndicator`. */
+  refreshSpinner: HTMLElement;
 }
 
 export interface PresenterListener {

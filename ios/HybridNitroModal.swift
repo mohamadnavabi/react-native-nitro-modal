@@ -47,6 +47,8 @@ final class HybridNitroModal: HybridNitroModalSpec {
   var keyboardBehavior: KeyboardBehavior = .pan
   var popupAnimation: PopupAnimation = .scale
   var pullToRefreshEnabled = false
+  var refreshing: Bool?
+  var refreshIndicatorColor: Double?
 
   var onPresent: (() -> Void)?
   var onDismiss: ((DismissReason) -> Void)?
@@ -326,7 +328,9 @@ final class HybridNitroModal: HybridNitroModalSpec {
       contentBackgroundColor: contentBackgroundColor.map(UIColor.init(processedColor:)) ?? .systemBackground,
       keyboardBehavior: keyboardBehavior,
       popupAnimation: popupAnimation,
-      pullToRefreshEnabled: pullToRefreshEnabled
+      pullToRefreshEnabled: pullToRefreshEnabled,
+      refreshing: refreshing,
+      refreshIndicatorColor: refreshIndicatorColor.map(UIColor.init(processedColor:))
     )
   }
 

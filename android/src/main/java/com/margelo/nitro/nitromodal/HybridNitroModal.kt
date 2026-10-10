@@ -52,6 +52,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
   override var keyboardBehavior: KeyboardBehavior = KeyboardBehavior.PAN
   override var popupAnimation: PopupAnimation = PopupAnimation.SCALE
   override var pullToRefreshEnabled: Boolean = false
+  override var refreshing: Boolean? = null
+  override var refreshIndicatorColor: Double? = null
 
   override var onPresent: (() -> Unit)? = null
   override var onDismiss: ((reason: DismissReason) -> Unit)? = null
@@ -337,6 +339,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
       keyboardBehavior = keyboardBehavior,
       popupAnimation = popupAnimation,
       pullToRefreshEnabled = pullToRefreshEnabled,
+      refreshing = refreshing,
+      refreshIndicatorColor = refreshIndicatorColor?.toProcessedColor(),
     )
   }
 

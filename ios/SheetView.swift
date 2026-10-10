@@ -27,7 +27,8 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
   private static let defaultCornerRadius: CGFloat = 16
   private static let regularMaxWidth: CGFloat = 704
   private static let grabberSize = CGSize(width: 36, height: 5)
-  /// How far below its lowest detent the sheet must be pulled to refresh.
+  /// How far below its lowest detent the sheet must be pulled to refresh,
+  /// and where it rests while refreshing.
   private static let refreshThreshold: CGFloat = 56
   private static let touchHandlerClass: AnyClass? = NSClassFromString("RCTSurfaceTouchHandler")
 
@@ -36,6 +37,7 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
   private let backdrop = BackdropView()
   private let sheetView = UIView()
   private let grabber = UIView()
+  private let refreshIndicator = UIActivityIndicatorView(style: .medium)
   private var config: ModalConfig
   private var selectedIndex: Int
   private var keyboardHeight: CGFloat = 0
@@ -49,6 +51,8 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
   private var releaseVelocity: CGFloat = 0
   private var reportedRestingTop: CGFloat?
   private var refreshFeedback: UIImpactFeedbackGenerator?
+  /// The sheet rests below its lowest detent, the indicator spinning above it.
+  private var isRefreshing = false
 
   private var lockedScrollView: UIScrollView?
   private var lockedOffsetY: CGFloat = 0
@@ -78,6 +82,7 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     self.config = config
     self.isInline = isInline
     selectedIndex = config.clampedInitialDetentIndex
+    isRefreshing = config.refreshing ?? false
     super.init(frame: .zero)
     backgroundColor = .clear
 
@@ -104,6 +109,12 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     grabber.backgroundColor = .tertiaryLabel
     grabber.layer.cornerRadius = Self.grabberSize.height / 2
     sheetView.addSubview(grabber)
+
+    // Behind the sheet, which uncovers it as it's pulled down.
+    refreshIndicator.hidesWhenStopped = false
+    refreshIndicator.isUserInteractionEnabled = false
+    refreshIndicator.alpha = 0
+    addSubview(refreshIndicator)
     addSubview(sheetView)
 
     let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
@@ -138,8 +149,12 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
   // MARK: Presentation
 
   func apply(_ newConfig: ModalConfig) {
+    let refreshingChanged = newConfig.refreshing != config.refreshing
     config = newConfig
     selectedIndex = min(selectedIndex, max(detents.count - 1, 0))
+    if refreshingChanged {
+      setRefreshing(newConfig.refreshing ?? false)
+    }
     applyAppearance()
     animateToRest()
   }
@@ -181,7 +196,10 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       damping: offscreen ? 1 : 0.88,
       duration: duration,
       animations: { self.layoutSheet() },
-      completion: completion
+      completion: {
+        self.stopRefreshIndicatorIfHidden()
+        completion()
+      }
     )
   }
 
@@ -227,9 +245,21 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     detents.indices.map(restingTop(for:))
   }
 
+  /// Where the sheet settles on `detents[index]`: held below the lowest
+  /// detent while refreshing.
+  private func settledTop(for index: Int) -> CGFloat {
+    let top = restingTop(for: index)
+    guard isRefreshing, let lowest = detentTops.max(), abs(top - lowest) < 1 else { return top }
+    return top + Self.refreshThreshold
+  }
+
+  private var settledTops: [CGFloat] {
+    detents.indices.map(settledTop(for:))
+  }
+
   private var currentTop: CGFloat {
     if isOffscreen { return bounds.height }
-    return dragTop ?? restingTop(for: selectedIndex)
+    return dragTop ?? settledTop(for: selectedIndex)
   }
 
   private func layoutSheet() {
@@ -243,7 +273,40 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       size: Self.grabberSize
     )
     backdrop.alpha = backdropAlpha(forTop: top)
+    layoutRefreshIndicator(sheetTop: top)
     reportRestingTop()
+  }
+
+  /// Centered in the gap a pull uncovers below the lowest detent, fading in
+  /// as the pull nears the threshold.
+  private func layoutRefreshIndicator(sheetTop top: CGFloat) {
+    let size = refreshIndicator.intrinsicContentSize
+    refreshIndicator.bounds = CGRect(origin: .zero, size: size)
+    refreshIndicator.center = CGPoint(x: bounds.midX, y: top - Self.refreshThreshold / 2)
+    guard config.refreshing != nil, !isOffscreen, let lowest = detentTops.max() else {
+      refreshIndicator.alpha = 0
+      return
+    }
+    let progress = min(max((top - lowest) / Self.refreshThreshold, 0), 1)
+    refreshIndicator.alpha = progress
+    if progress > 0, !refreshIndicator.isAnimating {
+      refreshIndicator.startAnimating()
+    }
+  }
+
+  /// Called once the sheet settles, so a fading indicator keeps spinning.
+  private func stopRefreshIndicatorIfHidden() {
+    if drag == nil, refreshIndicator.alpha == 0 {
+      refreshIndicator.stopAnimating()
+    }
+  }
+
+  private func setRefreshing(_ refreshing: Bool) {
+    guard refreshing != isRefreshing else { return }
+    isRefreshing = refreshing
+    if refreshing, !isOffscreen, config.refreshing != nil {
+      refreshIndicator.startAnimating()
+    }
   }
 
   /// Fully dimmed at every detent; fades out below the lowest one.
@@ -259,15 +322,18 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     sheetView.backgroundColor = config.contentBackgroundColor
     sheetView.layer.cornerRadius = config.cornerRadius ?? Self.defaultCornerRadius
     grabber.isHidden = !config.grabberVisible
+    refreshIndicator.color = config.refreshIndicatorColor
   }
 
   private func animateToRest() {
     guard drag == nil, !isOffscreen else { return }
     dragTop = nil
-    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction]) {
+    UIView.animate(withDuration: 0.3, delay: 0, options: [.beginFromCurrentState, .allowUserInteraction], animations: {
       self.setNeedsLayout()
       self.layoutIfNeeded()
-    }
+    }, completion: { _ in
+      self.stopRefreshIndicatorIfHidden()
+    })
   }
 
   private func animate(
@@ -372,7 +438,7 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       if let scrollView = state.scrollView {
         lockedOffsetY = scrollView.contentOffset.y
       }
-      if config.pullToRefreshEnabled, !config.dismissOnSwipe, isSettled,
+      if config.pullToRefreshEnabled, !config.dismissOnSwipe, !isRefreshing, isSettled,
          let lowest = detentTops.max(), abs(top - lowest) < 1 {
         state.canRefresh = true
         refreshFeedback = UIImpactFeedbackGenerator(style: .medium)
@@ -430,8 +496,13 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
       drag = nil
       refreshFeedback = nil
       let velocity = state.sheetDrove ? pan.velocity(in: self).y : 0
+      let refresh = state.refreshArmed && pan.state == .ended
+      if refresh {
+        // Settles on the refreshing position; React confirms or ends it.
+        setRefreshing(config.refreshing != nil)
+      }
       endDrag(at: dragTop ?? currentTop, velocity: velocity, holdingScroll: state.sheetDrove)
-      if state.refreshArmed, pan.state == .ended {
+      if refresh {
         delegate?.modalPresentationDidPullToRefresh()
       }
 
@@ -444,7 +515,7 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     if !holdingScroll {
       unlockScroll()
     }
-    let tops = detentTops
+    let tops = settledTops
     guard let lowest = tops.max() else { return }
     // Where a fling of this velocity would come to rest.
     let projected = top + velocity * 0.2
@@ -465,16 +536,17 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     if changed {
       delegate?.modalPresentationDidChangeDetent(index)
     }
-    animate(distance: restingTop(for: index) - top, velocity: velocity, animations: { self.layoutSheet() }) { [weak self] in
+    animate(distance: settledTop(for: index) - top, velocity: velocity, animations: { self.layoutSheet() }) { [weak self] in
       guard let self, self.drag == nil else { return }
       self.unlockScroll()
+      self.stopRefreshIndicatorIfHidden()
     }
   }
 
   /// Rubber-bands above the tallest detent, and below the lowest one when
   /// swiping cannot dismiss.
   private func constrained(_ top: CGFloat) -> CGFloat {
-    let tops = detentTops
+    let tops = settledTops
     guard let minTop = tops.min(), let maxTop = tops.max() else { return top }
     let dimension = max(bounds.height, 1)
     if top < minTop {

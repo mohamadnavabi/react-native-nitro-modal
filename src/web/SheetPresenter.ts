@@ -6,7 +6,9 @@ import {
   findVerticalScroller,
   isTextInput,
   prefersReducedMotion,
+  REFRESH_INDICATOR_SIZE,
   suppressNextClick,
+  toCSSColor,
   type Insets,
   type Size,
 } from './dom';
@@ -15,7 +17,10 @@ import { ModalPresenter, type PresenterListener } from './ModalPresenter';
 
 /** Gap kept above a modal sheet at its tallest. */
 const TOP_GAP = 10;
-/** How far below its lowest detent the sheet must be pulled to refresh. */
+/**
+ * How far below its lowest detent the sheet must be pulled to refresh, and
+ * where it rests while refreshing.
+ */
 const REFRESH_THRESHOLD = 56;
 /**
  * Extra sheet height below the viewport so it stays attached to the bottom
@@ -147,6 +152,9 @@ export class SheetPresenter extends ModalPresenter {
   private drag: Drag | null = null;
   /** Vertical velocity of the swipe that requested the dismissal. */
   private releaseVelocity = 0;
+  /** The sheet rests below its lowest detent, the indicator spinning above it. */
+  private refreshing = false;
+  private refreshSpin: Animation | null = null;
   /** The sheet's top edge in the viewport. */
   private readonly top = new AnimatedValue(0, 0.5, (value) =>
     this.render(value)
@@ -158,6 +166,7 @@ export class SheetPresenter extends ModalPresenter {
       Math.max(config.initialDetentIndex, 0),
       this.detents.length - 1
     );
+    this.refreshing = config.refreshing ?? false;
   }
 
   snapToDetent(index: number) {
@@ -199,7 +208,10 @@ export class SheetPresenter extends ModalPresenter {
     });
   }
 
-  protected configDidChange() {
+  protected configDidChange(previous: ModalConfig) {
+    if (previous.refreshing !== this.config.refreshing) {
+      this.refreshing = this.config.refreshing ?? false;
+    }
     this.selectedIndex = Math.min(this.selectedIndex, this.detents.length - 1);
     this.layout();
     this.animateToRest();
@@ -223,6 +235,8 @@ export class SheetPresenter extends ModalPresenter {
   protected teardown() {
     super.teardown();
     this.cancelDrag();
+    this.refreshSpin?.cancel();
+    this.refreshSpin = null;
     const surface = this.elements?.surface;
     surface?.removeEventListener('touchstart', this.handleTouchStart);
     surface?.removeEventListener('touchmove', this.handleTouchMove);
@@ -281,6 +295,18 @@ export class SheetPresenter extends ModalPresenter {
     return this.detents.map((_, index) => this.restingTop(index));
   }
 
+  /** Where the sheet settles on `detents[index]`: held below the lowest detent while refreshing. */
+  private settledTop(index: number): number {
+    const top = this.restingTop(index);
+    if (!this.refreshing || Math.abs(top - Math.max(...this.detentTops)) >= 1)
+      return top;
+    return top + REFRESH_THRESHOLD;
+  }
+
+  private get settledTops(): number[] {
+    return this.detents.map((_, index) => this.settledTop(index));
+  }
+
   private layout() {
     const { surface, content, grabber } = this.elements!;
     const width = sheetWidth(this.viewport.width, this.config.isInline);
@@ -298,6 +324,10 @@ export class SheetPresenter extends ModalPresenter {
     content.style.width = `${width}px`;
     content.style.height = `${this.maximumDetentValue}px`;
     grabber.style.display = this.config.grabberVisible ? '' : 'none';
+    this.elements!.refreshSpinner.style.color =
+      this.config.refreshIndicatorColor != null
+        ? toCSSColor(this.config.refreshIndicatorColor)
+        : 'GrayText';
 
     let height = contentHeight(this.config.detents, this.maximumDetentValue);
     if (this.config.keyboardBehavior === 'resize') {
@@ -311,6 +341,38 @@ export class SheetPresenter extends ModalPresenter {
     if (!this.elements) return;
     this.elements.surface.style.transform = `translate3d(0, ${top}px, 0)`;
     this.elements.backdrop.style.opacity = String(this.backdropAlpha(top));
+    this.renderRefreshIndicator(top);
+  }
+
+  /**
+   * Centered in the gap a pull uncovers below the lowest detent, fading in
+   * as the pull nears the threshold.
+   */
+  private renderRefreshIndicator(top: number) {
+    const { refreshIndicator, refreshSpinner } = this.elements!;
+    const visible =
+      this.config.refreshing != null &&
+      !this.entering &&
+      !this.isDismissing &&
+      !this.isOffscreen;
+    const lowest = Math.max(...this.detentTops);
+    const progress = visible
+      ? Math.min(Math.max((top - lowest) / REFRESH_THRESHOLD, 0), 1)
+      : 0;
+    const x = (this.viewport.width - REFRESH_INDICATOR_SIZE) / 2;
+    const y = top - (REFRESH_THRESHOLD + REFRESH_INDICATOR_SIZE) / 2;
+    refreshIndicator.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    refreshIndicator.style.opacity = String(progress);
+    if (progress > 0 && !this.refreshSpin) {
+      this.refreshSpin =
+        refreshSpinner.animate?.(
+          [{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }],
+          { duration: 800, iterations: Infinity }
+        ) ?? null;
+    } else if (progress === 0 && this.refreshSpin) {
+      this.refreshSpin.cancel();
+      this.refreshSpin = null;
+    }
   }
 
   /** Fully dimmed at every detent; fades out below the lowest one. */
@@ -327,7 +389,7 @@ export class SheetPresenter extends ModalPresenter {
 
   private settle(motion: Motion, velocity?: number) {
     this.top.animateTo(
-      this.restingTop(this.selectedIndex),
+      this.settledTop(this.selectedIndex),
       this.motion(motion),
       {
         velocity,
@@ -401,6 +463,7 @@ export class SheetPresenter extends ModalPresenter {
     drag.canRefresh =
       this.config.pullToRefreshEnabled &&
       !this.config.dismissOnSwipe &&
+      !this.refreshing &&
       isSettled &&
       Math.abs(drag.rawTop - Math.max(...this.detentTops)) < 1;
     const { surface } = this.elements!;
@@ -468,7 +531,11 @@ export class SheetPresenter extends ModalPresenter {
 
     const velocity = drag.sheetDrove ? this.velocity(drag) : 0;
     const top = this.top.value;
-    const tops = this.detentTops;
+    if (drag.refreshArmed && this.config.refreshing != null) {
+      // Settles on the refreshing position; React confirms or ends it.
+      this.refreshing = true;
+    }
+    const tops = this.settledTops;
     const lowest = Math.max(...tops);
     // Where a fling of this velocity would come to rest.
     const projected = top + velocity * 0.2;
@@ -529,7 +596,7 @@ export class SheetPresenter extends ModalPresenter {
 
   /** Rubber-bands above the tallest detent, and below the lowest one when swiping can't dismiss. */
   private constrained(top: number): number {
-    const tops = this.detentTops;
+    const tops = this.settledTops;
     const minTop = Math.min(...tops);
     const maxTop = Math.max(...tops);
     const dimension = Math.max(this.viewport.height, 1);

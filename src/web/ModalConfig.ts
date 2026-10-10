@@ -31,6 +31,10 @@ export interface ModalConfig {
   keyboardBehavior: KeyboardBehavior;
   popupAnimation: PopupAnimation;
   pullToRefreshEnabled: boolean;
+  /** A refresh is in progress; `null` shows no refresh indicator. */
+  refreshing: boolean | null;
+  /** 0xAARRGGBB; `null` uses the default. */
+  refreshIndicatorColor: number | null;
 }
 
 export function makeConfig(props: NitroModalProps): ModalConfig {
@@ -55,6 +59,8 @@ export function makeConfig(props: NitroModalProps): ModalConfig {
     keyboardBehavior: props.keyboardBehavior,
     popupAnimation: props.popupAnimation,
     pullToRefreshEnabled: props.pullToRefreshEnabled,
+    refreshing: props.refreshing ?? null,
+    refreshIndicatorColor: props.refreshIndicatorColor ?? null,
   };
 }
 

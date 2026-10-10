@@ -22,8 +22,9 @@ export default function App() {
   const [listOpen, setListOpen] = useState(false);
   const [popupOpen, setPopupOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
-  const [inlineOpen, setInlineOpen] = useState(true);
+  const [inlineOpen, setInlineOpen] = useState(false);
   const [lastEvent, setLastEvent] = useState('—');
+  const [inlineRefreshing, setInlineRefreshing] = useState(false);
   const imperativeSheet = useRef<NitroModalRef>(null);
 
   const log = (event: string) => setLastEvent(event);
@@ -178,7 +179,12 @@ export default function App() {
         detents={[240, 'large']}
         showGrabber
         onDetentChange={(index) => log(`inline detent → ${index}`)}
-        onPullToRefresh={() => log('inline pulled to refresh')}
+        refreshing={inlineRefreshing}
+        onPullToRefresh={() => {
+          log('inline pulled to refresh');
+          setInlineRefreshing(true);
+          setTimeout(() => setInlineRefreshing(false), 1500);
+        }}
         onDismiss={() => log('inline hidden')}
       >
         <FlatList

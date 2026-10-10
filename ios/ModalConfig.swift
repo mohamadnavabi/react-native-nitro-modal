@@ -53,6 +53,10 @@ struct ModalConfig: Equatable {
   var keyboardBehavior: KeyboardBehavior = .pan
   var popupAnimation: PopupAnimation = .scale
   var pullToRefreshEnabled = false
+  /// A refresh is in progress; `nil` shows no refresh indicator.
+  var refreshing: Bool?
+  /// `nil` uses the platform default.
+  var refreshIndicatorColor: UIColor?
 
   /// A `bottomSheet` living in the host view's bounds. Popups are always modal.
   var isInline: Bool {

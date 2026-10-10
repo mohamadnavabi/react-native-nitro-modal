@@ -49,6 +49,10 @@ internal data class ModalConfig(
   val keyboardBehavior: KeyboardBehavior = KeyboardBehavior.PAN,
   val popupAnimation: PopupAnimation = PopupAnimation.SCALE,
   val pullToRefreshEnabled: Boolean = false,
+  /** A refresh is in progress; `null` shows no refresh indicator. */
+  val refreshing: Boolean? = null,
+  /** `null` uses the platform default. */
+  val refreshIndicatorColor: Int? = null,
 ) {
   /** A `bottomSheet` living in the host view's bounds. Popups are always modal. */
   val isInline: Boolean

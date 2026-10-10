@@ -17,6 +17,9 @@ export const ZERO_INSETS: Insets = { top: 0, right: 0, bottom: 0, left: 0 };
 export const canUseDOM =
   typeof window !== 'undefined' && typeof document !== 'undefined';
 
+/** Width and height of the pull-to-refresh indicator. */
+export const REFRESH_INDICATOR_SIZE = 24;
+
 /** Converts a color from `processColor` (0xAARRGGBB) to CSS, scaling its alpha by `opacity`. */
 export function toCSSColor(argb: number, opacity = 1): string {
   // As an unsigned 32-bit value, whatever the sign it was passed with.

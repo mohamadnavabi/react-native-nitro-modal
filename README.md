@@ -19,7 +19,7 @@
 
 - 📄 **Native bottom sheets** with multiple detents (`small`, `medium`, `large`, `fitContent` or a height) and swipe-to-dismiss
 - 📌 **Inline sheets** — a persistent sheet that is part of your screen, with the views behind it still usable
-- 🔄 **Pull to refresh** — pulling a sheet down past its lowest detent
+- 🔄 **Pull to refresh** — pulling a sheet down past its lowest detent, with a native activity indicator
 - 🪟 **Centered popups** with native `scale` / `fade` transitions
 - 📏 **Content-sized sheets** — `fitContent` measures your React content and grows with it
 - ⌨️ **Keyboard aware** — the sheet or card follows the keyboard animation (`pan` or `resize`)
@@ -126,6 +126,7 @@ Detents are listed smallest first. `initialDetentIndex` selects where the sheet 
     presentation="inline"
     style={{ top: headerHeight }}
     detents={[320, 'large']}
+    refreshing={isRefreshing}
     onPullToRefresh={refresh}
   >
     <FlatList data={rows} renderItem={renderRow} nestedScrollEnabled />
@@ -142,6 +143,7 @@ A sheet hands drags off to the scroll view under the finger:
 - Dragging up expands the sheet first, then scrolls the content.
 - Dragging down scrolls the content back to its top. Once the content has scrolled during a drag, that drag never moves the sheet; the next drag collapses it.
 - With `onPullToRefresh` set, a drag that starts with the sheet resting on its lowest detent can pull it further down. Letting go past the threshold calls `onPullToRefresh` (with haptic feedback when it is crossed). This needs a sheet that can't be swiped away: inline, or `dismissOnSwipe={false}`.
+- With `refreshing` set too, an activity indicator shows in the gap the pull uncovers, and the sheet stays pulled down while `refreshing` is `true`, like `RefreshControl`. Set it to `true` in `onPullToRefresh` and back to `false` when the refresh is done. Setting it to `true` yourself shows the indicator without a pull.
 
 On Android, scrollable content takes part through nested scrolling, so set `nestedScrollEnabled` on it.
 
@@ -217,6 +219,8 @@ const sheet = useRef<NitroModalRef>(null);
 | `backgroundColor`        | `ColorValue`                                         | system surface     | Background of the sheet/card.                                                                     |
 | `keyboardBehavior`       | `'pan' \| 'resize' \| 'none'`                        | `'pan'`            | How the modal reacts to the software keyboard.                                                    |
 | `popupAnimation`         | `'scale' \| 'fade' \| 'none'`                        | `'scale'`          | Enter/exit transition of a popup.                                                                 |
+| `refreshing`             | `boolean`                                            | —                  | A refresh is in progress: the sheet stays pulled down with an activity indicator. See [pull to refresh](#scrolling-content-and-pull-to-refresh). |
+| `refreshIndicatorColor`  | `ColorValue`                                         | platform default   | Color of the refresh indicator.                                                                   |
 | `contentContainerStyle`  | `StyleProp<ViewStyle>`                               | —                  | Style of the view that wraps `children` inside the modal.                                         |
 | `testID`                 | `string`                                             | —                  | Applied to the content container.                                                                 |
 | `ref`                    | `Ref<NitroModalRef>`                                 | —                  | Imperative handle.                                                                                |

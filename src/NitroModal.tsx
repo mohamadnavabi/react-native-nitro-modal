@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
@@ -111,6 +112,15 @@ export interface NitroModalProps {
    * sheet resting on its lowest detent.
    */
   onPullToRefresh?: () => void;
+  /**
+   * Whether a refresh is in progress, like `RefreshControl`'s `refreshing`.
+   * While true, the sheet stays pulled down below its lowest detent with an
+   * activity indicator above it. Set it to `true` in `onPullToRefresh` and
+   * back to `false` when done. Leave undefined to show no indicator.
+   */
+  refreshing?: boolean;
+  /** Color of the refresh indicator. Defaults to the platform style. */
+  refreshIndicatorColor?: ColorValue;
   children?: ReactNode;
   testID?: string;
   ref?: Ref<NitroModalRef>;
@@ -158,6 +168,8 @@ export function NitroModal({
   onBackdropPress,
   onBackButtonPress,
   onPullToRefresh,
+  refreshing,
+  refreshIndicatorColor,
   children,
   testID,
   ref,
@@ -182,12 +194,21 @@ export function NitroModal({
   // is laid out there so `measure()`, which presses rely on, matches the
   // screen; native cancels the offset out on screen.
   const [restingTop, setRestingTop] = useState(0);
+  // Native starts refreshing as soon as a pull is released. Reporting `true`
+  // for the render that follows, then `refreshing` again, stops it if the
+  // handler didn't start a refresh (unchanged props never reach native).
+  const isRefreshControlled = refreshing !== undefined;
+  const [pullPending, setPullPending] = useState(false);
+  useEffect(() => {
+    if (pullPending) setPullPending(false);
+  }, [pullPending]);
   const hybridRef = useRef<NitroModalHybridView | null>(null);
 
   // Native callbacks are created once (stable props, no native updates on
   // re-render) and read the latest handlers from this ref.
   const latest = useRef({
     isControlled,
+    isRefreshControlled,
     onPresent,
     onDismiss,
     onDetentChange,
@@ -198,6 +219,7 @@ export function NitroModal({
   useLayoutEffect(() => {
     latest.current = {
       isControlled,
+      isRefreshControlled,
       onPresent,
       onDismiss,
       onDetentChange,
@@ -231,6 +253,7 @@ export function NitroModal({
         latest.current.onBackButtonPress?.();
       }),
       onPullToRefresh: callback(() => {
+        if (latest.current.isRefreshControlled) setPullPending(true);
         latest.current.onPullToRefresh?.();
       }),
       onRestingTopChange: callback((top: number) => {
@@ -315,6 +338,8 @@ export function NitroModal({
       keyboardBehavior={keyboardBehavior}
       popupAnimation={popupAnimation}
       pullToRefreshEnabled={onPullToRefresh != null}
+      refreshing={isRefreshControlled ? refreshing || pullPending : undefined}
+      refreshIndicatorColor={toNativeColor(refreshIndicatorColor)}
       {...nativeCallbacks}
     >
       {renderContent ? (
