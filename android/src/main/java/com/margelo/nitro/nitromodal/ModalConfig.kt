@@ -44,6 +44,9 @@ internal data class ModalConfig(
   val grabberVisible: Boolean = false,
   /** dp, `null` uses the platform default. */
   val cornerRadius: Float? = null,
+  /** dp, drawn above the content around the sheet/card. */
+  val borderWidth: Float = 0f,
+  val borderColor: Int = Color.TRANSPARENT,
   /** `null` uses the system surface color. */
   val contentBackgroundColor: Int? = null,
   val keyboardBehavior: KeyboardBehavior = KeyboardBehavior.PAN,

@@ -77,6 +77,10 @@ export interface NitroModalProps extends HybridViewProps {
   grabberVisible: boolean;
   /** Corner radius of the sheet/card. A negative value uses the platform default. */
   cornerRadius: number;
+  /** Width (dp/pt) of the border drawn around the sheet/card, above the content. 0 draws none. */
+  borderWidth: number;
+  /** Border color as a processed ARGB color. */
+  borderColor?: number;
   /** Sheet/card background as a processed ARGB color. Omit for the system background. */
   contentBackgroundColor?: number;
   keyboardBehavior: KeyboardBehavior;

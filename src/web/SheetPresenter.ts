@@ -339,28 +339,42 @@ export class SheetPresenter extends ModalPresenter {
 
   private render(top: number) {
     if (!this.elements) return;
-    this.elements.surface.style.transform = `translate3d(0, ${top}px, 0)`;
-    this.elements.backdrop.style.opacity = String(this.backdropAlpha(top));
-    this.renderRefreshIndicator(top);
+    const { surface, content, backdrop } = this.elements;
+    const { sheetTop, pull } = this.split(top);
+    surface.style.transform = `translate3d(0, ${sheetTop}px, 0)`;
+    content.style.transform = pull > 0 ? `translate3d(0, ${pull}px, 0)` : '';
+    backdrop.style.opacity = String(this.backdropAlpha(sheetTop));
+    this.renderRefreshIndicator(pull);
   }
 
   /**
-   * Centered in the gap a pull uncovers below the lowest detent, fading in
-   * as the pull nears the threshold.
+   * With a refresh indicator, a pull below the lowest detent keeps the sheet
+   * there and moves the content down inside it instead, uncovering the
+   * indicator at the top of the sheet.
    */
-  private renderRefreshIndicator(top: number) {
-    const { refreshIndicator, refreshSpinner } = this.elements!;
-    const visible =
+  private split(top: number): { sheetTop: number; pull: number } {
+    const pullsContent =
       this.config.refreshing != null &&
+      this.config.pullToRefreshEnabled &&
+      !this.config.dismissOnSwipe &&
       !this.entering &&
       !this.isDismissing &&
       !this.isOffscreen;
     const lowest = Math.max(...this.detentTops);
-    const progress = visible
-      ? Math.min(Math.max((top - lowest) / REFRESH_THRESHOLD, 0), 1)
-      : 0;
-    const x = (this.viewport.width - REFRESH_INDICATOR_SIZE) / 2;
-    const y = top - (REFRESH_THRESHOLD + REFRESH_INDICATOR_SIZE) / 2;
+    if (!pullsContent || !(top > lowest)) return { sheetTop: top, pull: 0 };
+    return { sheetTop: lowest, pull: top - lowest };
+  }
+
+  /**
+   * Centered in the gap a pull uncovers above the content, fading in as the
+   * pull nears the threshold.
+   */
+  private renderRefreshIndicator(pull: number) {
+    const { refreshIndicator, refreshSpinner } = this.elements!;
+    const progress = Math.min(Math.max(pull / REFRESH_THRESHOLD, 0), 1);
+    const width = sheetWidth(this.viewport.width, this.config.isInline);
+    const x = (width - REFRESH_INDICATOR_SIZE) / 2;
+    const y = (pull - REFRESH_INDICATOR_SIZE) / 2;
     refreshIndicator.style.transform = `translate3d(${x}px, ${y}px, 0)`;
     refreshIndicator.style.opacity = String(progress);
     if (progress > 0 && !this.refreshSpin) {

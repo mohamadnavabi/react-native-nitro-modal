@@ -23,7 +23,9 @@ export interface ModalElements {
   /** Hosts the React content. */
   content: HTMLElement;
   grabber: HTMLElement;
-  /** Behind the sheet, uncovered as it's pulled down to refresh. */
+  /** Above the content, following the surface's corners. */
+  border: HTMLElement;
+  /** Inside the sheet behind the content, uncovered as it's pulled down to refresh. */
   refreshIndicator: HTMLElement;
   /** The spinning ring inside `refreshIndicator`. */
   refreshSpinner: HTMLElement;
@@ -246,6 +248,12 @@ export abstract class ModalPresenter {
       config.contentBackgroundColor != null
         ? toCSSColor(config.contentBackgroundColor)
         : 'Canvas';
+    const { border } = this.elements!;
+    border.style.borderWidth = `${config.borderWidth}px`;
+    border.style.borderColor =
+      config.borderColor != null
+        ? toCSSColor(config.borderColor)
+        : 'transparent';
   }
 
   /** Inline, only the surface takes input; the rest reaches the page. */

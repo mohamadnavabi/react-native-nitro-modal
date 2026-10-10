@@ -125,6 +125,8 @@ final class PopupViewController: UIViewController, ModalPresenting, UIViewContro
     backdrop.configure(color: config.backdropColor, opacity: config.backdropOpacity, blurRadius: config.backdropBlurRadius)
     card.backgroundColor = config.contentBackgroundColor
     card.layer.cornerRadius = config.cornerRadius ?? Self.defaultCornerRadius
+    card.layer.borderWidth = config.borderWidth
+    card.layer.borderColor = config.borderColor.cgColor
   }
 
   /// Area a card may occupy inside `bounds`, keeping clear of the safe area.

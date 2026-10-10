@@ -1,5 +1,6 @@
 package com.margelo.nitro.nitromodal
 
+import android.graphics.Color
 import android.os.Handler
 import android.os.Looper
 import android.view.WindowManager
@@ -48,6 +49,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
   override var dismissOnBackButton: Boolean = true
   override var grabberVisible: Boolean = false
   override var cornerRadius: Double = -1.0
+  override var borderWidth: Double = 0.0
+  override var borderColor: Double? = null
   override var contentBackgroundColor: Double? = null
   override var keyboardBehavior: KeyboardBehavior = KeyboardBehavior.PAN
   override var popupAnimation: PopupAnimation = PopupAnimation.SCALE
@@ -335,6 +338,8 @@ class HybridNitroModal(private val reactContext: ThemedReactContext) :
       dismissOnBackButton = dismissOnBackButton && !inline,
       grabberVisible = grabberVisible,
       cornerRadius = cornerRadius.takeIf { it >= 0 }?.toFloat(),
+      borderWidth = borderWidth.takeIf { it.isFinite() && it > 0 }?.toFloat() ?: 0f,
+      borderColor = borderColor?.toProcessedColor() ?: Color.TRANSPARENT,
       contentBackgroundColor = contentBackgroundColor?.toProcessedColor(),
       keyboardBehavior = keyboardBehavior,
       popupAnimation = popupAnimation,

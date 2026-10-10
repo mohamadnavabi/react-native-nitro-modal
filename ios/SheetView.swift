@@ -110,11 +110,11 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     grabber.layer.cornerRadius = Self.grabberSize.height / 2
     sheetView.addSubview(grabber)
 
-    // Behind the sheet, which uncovers it as it's pulled down.
+    // Inside the sheet, behind the content, which uncovers it as it's pulled down.
     refreshIndicator.hidesWhenStopped = false
     refreshIndicator.isUserInteractionEnabled = false
     refreshIndicator.alpha = 0
-    addSubview(refreshIndicator)
+    sheetView.insertSubview(refreshIndicator, belowSubview: contentView)
     addSubview(sheetView)
 
     let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
@@ -180,7 +180,7 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
 
   /// Slides the sheet in or out; a swipe dismissal keeps its release velocity.
   func animateTransition(toOffscreen offscreen: Bool, animated: Bool, duration: TimeInterval, completion: @escaping () -> Void) {
-    let from = sheetView.frame.minY
+    let from = sheetView.frame.minY + contentView.frame.minY
     let velocity = offscreen ? releaseVelocity : 0
     releaseVelocity = 0
     isOffscreen = offscreen
@@ -262,32 +262,41 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     return dragTop ?? settledTop(for: selectedIndex)
   }
 
+  /// With a refresh indicator, a pull below the lowest detent keeps the sheet
+  /// there and moves the content down inside it instead, uncovering the
+  /// indicator at the top of the sheet.
+  private var pullsContent: Bool {
+    config.refreshing != nil && config.pullToRefreshEnabled && !config.dismissOnSwipe
+  }
+
+  /// Splits a sheet top into where the sheet goes and how far its content is pulled down.
+  private func split(_ top: CGFloat) -> (sheetTop: CGFloat, pull: CGFloat) {
+    guard pullsContent, !isOffscreen, let lowest = detentTops.max(), top > lowest else { return (top, 0) }
+    return (lowest, top - lowest)
+  }
+
   private func layoutSheet() {
     let width = sheetWidth
-    let top = currentTop
+    let (top, pull) = split(currentTop)
     backdrop.frame = bounds
     sheetView.frame = CGRect(x: (bounds.width - width) / 2, y: top, width: width, height: bounds.height + Self.overscroll)
-    contentView.frame = CGRect(x: 0, y: 0, width: width, height: maximumDetentValue)
+    contentView.frame = CGRect(x: 0, y: pull, width: width, height: maximumDetentValue)
     grabber.frame = CGRect(
       origin: CGPoint(x: (width - Self.grabberSize.width) / 2, y: 5),
       size: Self.grabberSize
     )
     backdrop.alpha = backdropAlpha(forTop: top)
-    layoutRefreshIndicator(sheetTop: top)
+    layoutRefreshIndicator(width: width, pull: pull)
     reportRestingTop()
   }
 
-  /// Centered in the gap a pull uncovers below the lowest detent, fading in
-  /// as the pull nears the threshold.
-  private func layoutRefreshIndicator(sheetTop top: CGFloat) {
+  /// Centered in the gap a pull uncovers above the content, fading in as the
+  /// pull nears the threshold.
+  private func layoutRefreshIndicator(width: CGFloat, pull: CGFloat) {
     let size = refreshIndicator.intrinsicContentSize
     refreshIndicator.bounds = CGRect(origin: .zero, size: size)
-    refreshIndicator.center = CGPoint(x: bounds.midX, y: top - Self.refreshThreshold / 2)
-    guard config.refreshing != nil, !isOffscreen, let lowest = detentTops.max() else {
-      refreshIndicator.alpha = 0
-      return
-    }
-    let progress = min(max((top - lowest) / Self.refreshThreshold, 0), 1)
+    refreshIndicator.center = CGPoint(x: width / 2, y: pull / 2)
+    let progress = min(max(pull / Self.refreshThreshold, 0), 1)
     refreshIndicator.alpha = progress
     if progress > 0, !refreshIndicator.isAnimating {
       refreshIndicator.startAnimating()
@@ -321,6 +330,9 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     backdrop.configure(color: config.backdropColor, opacity: config.backdropOpacity, blurRadius: config.backdropBlurRadius)
     sheetView.backgroundColor = config.contentBackgroundColor
     sheetView.layer.cornerRadius = config.cornerRadius ?? Self.defaultCornerRadius
+    // Drawn above the sublayers, so the content can't cover it.
+    sheetView.layer.borderWidth = config.borderWidth
+    sheetView.layer.borderColor = config.borderColor.cgColor
     grabber.isHidden = !config.grabberVisible
     refreshIndicator.color = config.refreshIndicatorColor
   }
@@ -425,9 +437,14 @@ final class SheetView: UIView, UIGestureRecognizerDelegate {
     switch pan.state {
     case .began:
       // Grab the sheet where it is, even mid-animation.
-      let isSettled = sheetView.layer.animationKeys()?.isEmpty ?? true
-      let top = sheetView.layer.presentation()?.frame.minY ?? sheetView.frame.minY
+      let isSettled = (sheetView.layer.animationKeys()?.isEmpty ?? true)
+        && (contentView.layer.animationKeys()?.isEmpty ?? true)
+      let sheetTop = sheetView.layer.presentation()?.frame.minY ?? sheetView.frame.minY
+      let pull = contentView.layer.presentation()?.frame.minY ?? contentView.frame.minY
+      let top = sheetTop + pull
       sheetView.layer.removeAllAnimations()
+      contentView.layer.removeAllAnimations()
+      refreshIndicator.layer.removeAllAnimations()
       backdrop.layer.removeAllAnimations()
       let translation = pan.translation(in: sheetView)
       let location = pan.location(in: sheetView)

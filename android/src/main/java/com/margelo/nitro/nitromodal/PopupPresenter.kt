@@ -12,6 +12,7 @@ import android.widget.FrameLayout
 import androidx.activity.BackEventCompat
 import androidx.core.graphics.Insets
 import com.facebook.react.uimanager.ThemedReactContext
+import kotlin.math.ceil
 
 /**
  * `popup` mode: a centered card over the backdrop. Enter/exit are
@@ -33,12 +34,15 @@ internal class PopupPresenter(
   private val cardFrame = FrameLayout(activity)
   private val card = FrameLayout(activity)
   private val cardBackground = GradientDrawable()
+  /** The border, as the card's foreground so the content can't cover it. */
+  private val cardBorder = GradientDrawable()
   private var started = false
   private var backPreview = false
 
   override fun createLayout(): ViewGroup {
     root.addView(backdrop, FrameLayout.LayoutParams(MATCH, MATCH))
     card.background = cardBackground
+    card.foreground = cardBorder
     card.outlineProvider = ViewOutlineProvider.BACKGROUND
     card.clipToOutline = true
     card.addView(contentRoot, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -166,6 +170,8 @@ internal class PopupPresenter(
   private fun applyAppearance() {
     cardBackground.cornerRadius = activity.dpToPx(config.cornerRadius ?: DEFAULT_CORNER_RADIUS_DP)
     cardBackground.setColor(config.surfaceColor(activity))
+    cardBorder.cornerRadius = cardBackground.cornerRadius
+    cardBorder.setStroke(ceil(activity.dpToPx(config.borderWidth)).toInt(), config.borderColor)
   }
 
   private fun updateCardSize() {

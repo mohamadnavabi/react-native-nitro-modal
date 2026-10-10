@@ -8,6 +8,7 @@ import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.os.Build
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
@@ -62,6 +63,8 @@ internal class BottomSheetPresenter(
   private val refreshIndicator = ProgressBar(activity)
   private val behavior = SheetBehavior()
   private val sheetBackground = GradientDrawable()
+  /** The border, as the sheet's foreground so the content can't cover it. */
+  private val sheetBorder = GradientDrawable()
   private var cornerRadiusPx = 0f
 
   /** Resting detents sorted by height; position i maps to [states][i]. */
@@ -133,18 +136,9 @@ internal class BottomSheetPresenter(
       layoutRefreshIndicator()
     }
 
-    // Behind the sheet, which uncovers it as it's pulled down.
-    refreshIndicator.isIndeterminate = true
-    refreshIndicator.visibility = View.INVISIBLE
-    refreshIndicator.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    coordinator.addView(
-      refreshIndicator,
-      CoordinatorLayout.LayoutParams(dp(REFRESH_INDICATOR_SIZE_DP), dp(REFRESH_INDICATOR_SIZE_DP)).apply {
-        gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-      },
-    )
-
     sheet.background = sheetBackground
+    // Extends past the bottom edge so only the top and sides show.
+    sheet.foreground = InsetDrawable(sheetBorder, 0, 0, 0, -dp(BORDER_OVERHANG_DP))
     sheet.outlineProvider = object : ViewOutlineProvider() {
       override fun getOutline(view: View, outline: Outline) {
         // Extends past the bottom edge so only the top corners round. A round
@@ -155,6 +149,18 @@ internal class BottomSheetPresenter(
       }
     }
     sheet.clipToOutline = true
+    // Inside the sheet, behind the content, which uncovers it as it's pulled down.
+    refreshIndicator.isIndeterminate = true
+    refreshIndicator.visibility = View.INVISIBLE
+    refreshIndicator.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    sheet.addView(
+      refreshIndicator,
+      FrameLayout.LayoutParams(
+        dp(REFRESH_INDICATOR_SIZE_DP),
+        dp(REFRESH_INDICATOR_SIZE_DP),
+        Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+      ),
+    )
     sheet.addView(contentRoot, FrameLayout.LayoutParams(MATCH, MATCH))
     sheet.addView(
       grabber,
@@ -233,6 +239,7 @@ internal class BottomSheetPresenter(
   override fun onConfigChanged(previous: ModalConfig) {
     applyAppearance()
     if (previous.refreshing != config.refreshing) setRefreshing(config.refreshing ?: false)
+    applyTranslation()
     layoutRefreshIndicator()
     if (presented && !isDismissing) behavior.isHideable = config.dismissOnSwipe
     if (previous.detents != config.detents || previous.keyboardBehavior != config.keyboardBehavior) {
@@ -264,9 +271,11 @@ internal class BottomSheetPresenter(
     if (radius != cornerRadiusPx) {
       cornerRadiusPx = radius
       sheetBackground.cornerRadii = floatArrayOf(radius, radius, radius, radius, 0f, 0f, 0f, 0f)
+      sheetBorder.cornerRadii = sheetBackground.cornerRadii
       sheet.invalidateOutline()
     }
     sheetBackground.setColor(config.surfaceColor(activity))
+    sheetBorder.setStroke(ceil(activity.dpToPx(config.borderWidth)).toInt(), config.borderColor)
     grabber.visibility = if (config.grabberVisible) View.VISIBLE else View.GONE
     grabber.background = GradientDrawable().apply {
       cornerRadius = activity.dpToPx(2f)
@@ -386,7 +395,11 @@ internal class BottomSheetPresenter(
       val headroom = (sheet.top - systemInsets.top).coerceAtLeast(0)
       keyboardOverlap.coerceAtMost(headroom)
     }
-    sheet.translationY = pullOffset - lift
+    // With a refresh indicator, the sheet stays on its lowest detent and the
+    // content moves down inside it, uncovering the indicator.
+    val pullsContent = config.refreshing != null
+    sheet.translationY = (if (pullsContent) 0f else pullOffset) - lift
+    contentRoot.translationY = if (pullsContent) pullOffset else 0f
   }
 
   private fun setPullOffset(offset: Float) {
@@ -419,12 +432,12 @@ internal class BottomSheetPresenter(
   }
 
   /**
-   * Centered in the gap a pull uncovers below the lowest detent, fading in
-   * as the pull nears the threshold.
+   * Centered in the gap a pull uncovers above the content, fading in as the
+   * pull nears the threshold.
    */
   private fun layoutRefreshIndicator() {
     val size = refreshIndicator.layoutParams?.height ?: return
-    refreshIndicator.translationY = sheet.top + sheet.translationY - (refreshThreshold + size) / 2
+    refreshIndicator.translationY = (pullOffset - size) / 2
     val progress = if (config.refreshing == null || isDismissing) 0f else (pullOffset / refreshThreshold).coerceIn(0f, 1f)
     refreshIndicator.alpha = progress
     // Hidden, the indeterminate animation stops.
@@ -636,6 +649,7 @@ internal class BottomSheetPresenter(
     /** How far below its lowest detent the sheet must be pulled to refresh. */
     private const val REFRESH_THRESHOLD_DP = 56f
     private const val REFRESH_INDICATOR_SIZE_DP = 32f
+    private const val BORDER_OVERHANG_DP = 8f
     private const val PULL_RELEASE_DURATION = 300L
     private val THRESHOLD_FEEDBACK =
       if (Build.VERSION.SDK_INT >= 34) {

@@ -43,6 +43,8 @@ final class HybridNitroModal: HybridNitroModalSpec {
   var dismissOnBackButton = true
   var grabberVisible = false
   var cornerRadius: Double = -1
+  var borderWidth: Double = 0
+  var borderColor: Double?
   var contentBackgroundColor: Double?
   var keyboardBehavior: KeyboardBehavior = .pan
   var popupAnimation: PopupAnimation = .scale
@@ -325,6 +327,8 @@ final class HybridNitroModal: HybridNitroModalSpec {
       dismissOnSwipe: dismissOnSwipe && !inline,
       grabberVisible: grabberVisible,
       cornerRadius: cornerRadius >= 0 ? CGFloat(cornerRadius) : nil,
+      borderWidth: borderWidth.isFinite ? max(CGFloat(borderWidth), 0) : 0,
+      borderColor: borderColor.map(UIColor.init(processedColor:)) ?? .clear,
       contentBackgroundColor: contentBackgroundColor.map(UIColor.init(processedColor:)) ?? .systemBackground,
       keyboardBehavior: keyboardBehavior,
       popupAnimation: popupAnimation,

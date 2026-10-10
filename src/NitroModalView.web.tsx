@@ -45,6 +45,7 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
   const surface = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const grabber = useRef<HTMLDivElement>(null);
+  const border = useRef<HTMLDivElement>(null);
   const refreshIndicator = useRef<HTMLDivElement>(null);
   const refreshSpinner = useRef<HTMLDivElement>(null);
 
@@ -69,6 +70,7 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
       surface: surface.current!,
       content: content.current!,
       grabber: grabber.current!,
+      border: border.current!,
       refreshIndicator: refreshIndicator.current!,
       refreshSpinner: refreshSpinner.current!,
     });
@@ -102,14 +104,15 @@ function WebNitroModalView(props: WebNitroModalViewProps) {
       }
     >
       <div ref={backdrop} aria-hidden style={styles.backdrop} />
-      <div ref={refreshIndicator} aria-hidden style={styles.refreshIndicator}>
-        <div ref={refreshSpinner} style={styles.refreshSpinner} />
-      </div>
       <div ref={surface} style={styles.surface}>
+        <div ref={refreshIndicator} aria-hidden style={styles.refreshIndicator}>
+          <div ref={refreshSpinner} style={styles.refreshSpinner} />
+        </div>
         <div ref={content} style={styles.content}>
           {children}
         </div>
         <div ref={grabber} aria-hidden style={styles.grabber} />
+        <div ref={border} aria-hidden style={styles.border} />
       </div>
     </div>
   ) : null;
@@ -177,6 +180,16 @@ const styles = {
     marginLeft: -18,
     borderRadius: 2.5,
     backgroundColor: 'rgba(127, 127, 127, 0.4)',
+    pointerEvents: 'none',
+  },
+  // Sized by the presenter's border width; follows the surface's corners.
+  border: {
+    position: 'absolute',
+    inset: 0,
+    boxSizing: 'border-box',
+    borderStyle: 'solid',
+    borderWidth: 0,
+    borderRadius: 'inherit',
     pointerEvents: 'none',
   },
   refreshIndicator: {

@@ -49,6 +49,9 @@ struct ModalConfig: Equatable {
   var grabberVisible = false
   /// `nil` uses the platform default.
   var cornerRadius: CGFloat?
+  /// Border around the sheet/card, drawn above the content.
+  var borderWidth: CGFloat = 0
+  var borderColor: UIColor = .clear
   var contentBackgroundColor: UIColor = .systemBackground
   var keyboardBehavior: KeyboardBehavior = .pan
   var popupAnimation: PopupAnimation = .scale

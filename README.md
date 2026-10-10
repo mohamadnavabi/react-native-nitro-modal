@@ -143,7 +143,7 @@ A sheet hands drags off to the scroll view under the finger:
 - Dragging up expands the sheet first, then scrolls the content.
 - Dragging down scrolls the content back to its top. Once the content has scrolled during a drag, that drag never moves the sheet; the next drag collapses it.
 - With `onPullToRefresh` set, a drag that starts with the sheet resting on its lowest detent can pull it further down. Letting go past the threshold calls `onPullToRefresh` (with haptic feedback when it is crossed). This needs a sheet that can't be swiped away: inline, or `dismissOnSwipe={false}`.
-- With `refreshing` set too, an activity indicator shows in the gap the pull uncovers, and the sheet stays pulled down while `refreshing` is `true`, like `RefreshControl`. Set it to `true` in `onPullToRefresh` and back to `false` when the refresh is done. Setting it to `true` yourself shows the indicator without a pull.
+- With `refreshing` set too, the sheet stays on its lowest detent and its content moves down inside it, uncovering an activity indicator at the top of the sheet. The content stays pulled down while `refreshing` is `true`, like `RefreshControl`. Set it to `true` in `onPullToRefresh` and back to `false` when the refresh is done. Setting it to `true` yourself shows the indicator without a pull.
 
 On Android, scrollable content takes part through nested scrolling, so set `nestedScrollEnabled` on it.
 
@@ -216,6 +216,8 @@ const sheet = useRef<NitroModalRef>(null);
 | `dismissOnBackButton`    | `boolean`                                            | `true`             | The Android back button/gesture (Escape on web) closes the modal.                                 |
 | `showGrabber`            | `boolean`                                            | `false`            | Shows the drag handle on a bottom sheet.                                                          |
 | `cornerRadius`           | `number`                                             | platform default   | Corner radius of the sheet/card.                                                                  |
+| `borderWidth`            | `number`                                             | `0`                | Width of a border around the sheet/card, drawn above the content.                                 |
+| `borderColor`            | `ColorValue`                                         | `'transparent'`    | Color of the border.                                                                              |
 | `backgroundColor`        | `ColorValue`                                         | system surface     | Background of the sheet/card.                                                                     |
 | `keyboardBehavior`       | `'pan' \| 'resize' \| 'none'`                        | `'pan'`            | How the modal reacts to the software keyboard.                                                    |
 | `popupAnimation`         | `'scale' \| 'fade' \| 'none'`                        | `'scale'`          | Enter/exit transition of a popup.                                                                 |

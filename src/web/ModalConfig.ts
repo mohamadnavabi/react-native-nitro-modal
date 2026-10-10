@@ -26,6 +26,10 @@ export interface ModalConfig {
   grabberVisible: boolean;
   /** `null` uses the default. */
   cornerRadius: number | null;
+  /** Border around the surface, drawn above the content. */
+  borderWidth: number;
+  /** 0xAARRGGBB; `null` draws no border. */
+  borderColor: number | null;
   /** 0xAARRGGBB; `null` uses the system background. */
   contentBackgroundColor: number | null;
   keyboardBehavior: KeyboardBehavior;
@@ -55,6 +59,11 @@ export function makeConfig(props: NitroModalProps): ModalConfig {
     dismissOnBackButton: props.dismissOnBackButton && !isInline,
     grabberVisible: props.grabberVisible,
     cornerRadius: props.cornerRadius >= 0 ? props.cornerRadius : null,
+    borderWidth:
+      Number.isFinite(props.borderWidth) && props.borderWidth > 0
+        ? props.borderWidth
+        : 0,
+    borderColor: props.borderColor ?? null,
     contentBackgroundColor: props.contentBackgroundColor ?? null,
     keyboardBehavior: props.keyboardBehavior,
     popupAnimation: props.popupAnimation,

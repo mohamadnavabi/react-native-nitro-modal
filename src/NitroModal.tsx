@@ -92,6 +92,13 @@ export interface NitroModalProps {
   showGrabber?: boolean;
   /** Corner radius of the sheet/card. Defaults to the platform style. */
   cornerRadius?: number;
+  /**
+   * Width (dp/pt/px) of a border around the sheet/card, drawn above the
+   * content and following its corners. @default 0
+   */
+  borderWidth?: number;
+  /** Color of the border. @default 'transparent' */
+  borderColor?: ColorValue;
   /** Sheet/card background. Defaults to the system surface color. */
   backgroundColor?: ColorValue;
   /** @default 'pan' */
@@ -158,6 +165,8 @@ export function NitroModal({
   dismissOnBackButton = true,
   showGrabber = false,
   cornerRadius,
+  borderWidth = 0,
+  borderColor,
   backgroundColor,
   keyboardBehavior = 'pan',
   popupAnimation = 'scale',
@@ -334,6 +343,8 @@ export function NitroModal({
       dismissOnBackButton={dismissOnBackButton}
       grabberVisible={showGrabber}
       cornerRadius={cornerRadius ?? -1}
+      borderWidth={borderWidth}
+      borderColor={toNativeColor(borderColor)}
       contentBackgroundColor={toNativeColor(backgroundColor)}
       keyboardBehavior={keyboardBehavior}
       popupAnimation={popupAnimation}
