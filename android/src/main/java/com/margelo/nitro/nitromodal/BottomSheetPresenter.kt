@@ -74,6 +74,8 @@ internal class BottomSheetPresenter(
   private var lastDetentIndex = -1
   private var reportedRestingTop = Int.MIN_VALUE
 
+  private var settlingTo = -1
+
   /** The behavior is dragging the sheet (as opposed to a nested scroll moving it). */
   private var sheetDragging = false
 
@@ -96,6 +98,8 @@ internal class BottomSheetPresenter(
         return
       }
       if (newState == BottomSheetBehavior.STATE_DRAGGING) {
+        // The user took over; the behavior picks where it settles.
+        settlingTo = -1
         sheetDragging = true
         coordinator.notifyNativeGesture(started = true)
         // A refreshing sheet follows the finger from its lowest detent.
@@ -106,6 +110,7 @@ internal class BottomSheetPresenter(
       }
       val position = states().indexOf(newState)
       if (position < 0 || isDismissing) return
+      settlingTo = -1
       presented = true
       // Hideable while entering/exiting; at rest, swipe-to-dismiss follows the prop.
       behavior.isHideable = this@BottomSheetPresenter.config.dismissOnSwipe
@@ -195,11 +200,12 @@ internal class BottomSheetPresenter(
       // Settles with the behavior's own animation, from HIDDEN on show or from
       // wherever a reversed exit got to (back to the detent it left).
       val index = if (lastDetentIndex >= 0) lastDetentIndex else config.clampedInitialDetentIndex
-      behavior.state = stateFor(index)
+      settleTo(index)
     }
   }
 
   override fun animateOut(fromBackGesture: Boolean, onEnd: () -> Unit) {
+    settlingTo = -1
     coordinator.cancelPull()
     if (behavior.state == BottomSheetBehavior.STATE_HIDDEN || !coordinator.isLaidOut) {
       onEnd()
@@ -261,10 +267,15 @@ internal class BottomSheetPresenter(
 
   override fun snapToDetent(index: Int) {
     if (!presented || isDismissing) return
-    behavior.state = stateFor(index)
+    settleTo(index)
   }
 
   override fun onTeardown() = coordinator.release()
+
+  private fun settleTo(index: Int) {
+    settlingTo = index
+    behavior.state = stateFor(index)
+  }
 
   private fun applyAppearance() {
     val radius = activity.dpToPx(config.cornerRadius ?: DEFAULT_CORNER_RADIUS_DP)
@@ -291,6 +302,7 @@ internal class BottomSheetPresenter(
     val bottomInset = systemInsets.bottom
     maxContentHeight = (parentHeight - systemInsets.top - bottomInset).coerceAtLeast(1)
 
+    val previousHeights = sortedDetents.map { it.height }
     val requested = config.detents.ifEmpty { listOf(Detent.FitContent) }
     val detents = requested
       .mapIndexed { index, detent -> RestingHeight(index, contentHeightFor(detent) + bottomInset) }
@@ -328,6 +340,16 @@ internal class BottomSheetPresenter(
         behavior.halfExpandedRatio = (heights[1].toFloat() / parentHeight).coerceIn(0.01f, 0.99f)
         behavior.expandedOffset = parentHeight - heights[2]
       }
+    }
+
+    // A settle heads for where its detent was when it started, and the
+    // behavior only moves a sheet at rest when its detents change: content
+    // that grows while the sheet slides in would leave it stopped short.
+    // Send the settle to where the detent is now.
+    if (heights != previousHeights && settlingTo >= 0 && !isDismissing &&
+      behavior.state == BottomSheetBehavior.STATE_SETTLING
+    ) {
+      behavior.state = stateFor(settlingTo)
     }
 
     val availableHeight =

@@ -42,6 +42,7 @@ class NitroModalHostView(context: ThemedReactContext) : ViewGroup(context), Reac
 
   private val measureAndLayout = Runnable {
     layoutPending = false
+    forceLayout()
     measure(
       MeasureSpec.makeMeasureSpec(width, MeasureSpec.EXACTLY),
       MeasureSpec.makeMeasureSpec(height, MeasureSpec.EXACTLY),
@@ -66,17 +67,27 @@ class NitroModalHostView(context: ThemedReactContext) : ViewGroup(context), Reac
     // React Native views drop layout requests; the inline sheet's layout
     // (CoordinatorLayout, BottomSheetBehavior) relies on them. Also called
     // from the super constructor, before any child exists.
-    if (childCount > 0 && !layoutPending) {
-      layoutPending = true
-      post(measureAndLayout)
-    }
+    if (childCount > 0) scheduleLayout()
+  }
+
+  private fun scheduleLayout() {
+    if (layoutPending) return
+    layoutPending = true
+    post(measureAndLayout)
   }
 
   override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
     // Laid out by Fabric. A modal's children live in the modal window; an
     // inline sheet's layout fills this view.
-    val width = r - l
-    val height = b - t
+    layoutChildren(r - l, b - t)
+    if (changed) onLayoutChange?.invoke()
+    if (forcePendingLayout()) {
+      layoutChildren(r - l, b - t)
+      if (forcePendingLayout()) scheduleLayout()
+    }
+  }
+
+  private fun layoutChildren(width: Int, height: Int) {
     for (i in 0 until childCount) {
       val child = getChildAt(i)
       child.measure(
@@ -85,7 +96,22 @@ class NitroModalHostView(context: ThemedReactContext) : ViewGroup(context), Reac
       )
       child.layout(0, 0, width, height)
     }
-    if (changed) onLayoutChange?.invoke()
+  }
+
+  /**
+   * Whether a view in the sheet's layout waits for a layout pass. Marks the
+   * views above it so the next pass reaches it. The React content is laid out
+   * by Fabric, and gone views take no part in layout.
+   */
+  private fun forcePendingLayout(view: ViewGroup = this): Boolean {
+    var pending = false
+    for (i in 0 until view.childCount) {
+      val child = view.getChildAt(i)
+      if (child.visibility == GONE || child is ModalContentRoot) continue
+      if ((child is ViewGroup && forcePendingLayout(child)) || child.isLayoutRequested) pending = true
+    }
+    if (pending && view !== this) view.forceLayout()
+    return pending
   }
 
   override fun onAttachedToWindow() {
@@ -108,5 +134,9 @@ class NitroModalHostView(context: ThemedReactContext) : ViewGroup(context), Reac
 
   internal fun addInlineRoot(root: ViewGroup) {
     addView(root, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    // addView requests layout before the child is added, when requestLayout
+    // above still skips it. Until something lays this view out, the sheet's
+    // own layout requests stop here and it never leaves its hidden state.
+    scheduleLayout()
   }
 }
